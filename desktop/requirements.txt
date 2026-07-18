@@ -1,0 +1,5 @@
+playwright>=1.49.0
+PyYAML>=6.0.2
+python-dotenv>=1.0.1
+keyring>=25.5.0
+win10toast>=0.9; platform_system=="Windows"

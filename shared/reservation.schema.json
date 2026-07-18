@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SelectTimeReservationConfig",
+  "type": "object",
+  "required": ["facility", "target", "schedule", "payment", "retry"],
+  "properties": {
+    "facility": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "reservation_url": { "type": "string", "format": "uri" }
+      },
+      "required": ["reservation_url"]
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "days_ahead": { "type": "integer", "minimum": 1, "maximum": 7, "default": 7 },
+        "preferred_times": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^\\d{2}:\\d{2}$" },
+          "description": "Priority-ordered HH:MM start times"
+        },
+        "preferred_courts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Court labels in preference order; empty = any"
+        }
+      },
+      "required": ["days_ahead", "preferred_times"]
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "open_hour": { "type": "integer", "minimum": 0, "maximum": 23, "default": 15 },
+        "open_minute": { "type": "integer", "minimum": 0, "maximum": 59, "default": 0 },
+        "lead_seconds": {
+          "type": "integer",
+          "default": 30,
+          "description": "Start watch this many seconds before open"
+        }
+      },
+      "required": ["open_hour", "open_minute"]
+    },
+    "payment": {
+      "type": "object",
+      "properties": {
+        "method": { "type": "string", "enum": ["card", "app_card"] },
+        "installment_months": { "type": "integer", "minimum": 0, "default": 0 }
+      },
+      "required": ["method"]
+    },
+    "retry": {
+      "type": "object",
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "default": 20 },
+        "interval_seconds": { "type": "number", "minimum": 0.5, "default": 2 }
+      },
+      "required": ["max_attempts", "interval_seconds"]
+    },
+    "headless": { "type": "boolean", "default": false }
+  }
+}

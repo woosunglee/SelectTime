@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="@string/section_account" android:textStyle="bold" />
+        <EditText android:id="@+id/inputAucId" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_auc_id"
+            android:inputType="text" />
+        <EditText android:id="@+id/inputAucPassword" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_auc_password"
+            android:inputType="textPassword" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:text="@string/section_prefs" android:textStyle="bold" />
+        <EditText android:id="@+id/inputPreferredTimes" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_times" />
+        <EditText android:id="@+id/inputDaysAhead" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_days_ahead"
+            android:inputType="number" />
+        <EditText android:id="@+id/inputOpenHour" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_open_hour"
+            android:inputType="number" />
+        <EditText android:id="@+id/inputOpenMinute" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_open_minute"
+            android:inputType="number" />
+        <EditText android:id="@+id/inputReservationUrl" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_url"
+            android:inputType="textUri" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:text="@string/section_payment" android:textStyle="bold" />
+        <Spinner android:id="@+id/spinnerPayment" android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+        <EditText android:id="@+id/inputCardNumber" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_card_number"
+            android:inputType="number" />
+        <EditText android:id="@+id/inputCardExpiry" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_card_expiry"
+            android:inputType="text" />
+        <EditText android:id="@+id/inputCardCvc" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_card_cvc"
+            android:inputType="numberPassword" />
+        <EditText android:id="@+id/inputCardPassword" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_card_password"
+            android:inputType="numberPassword" />
+        <EditText android:id="@+id/inputCardBirth" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="@string/hint_card_birth"
+            android:inputType="number" />
+
+        <Button android:id="@+id/btnSave" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:layout_marginTop="16dp"
+            android:text="@string/save" />
+    </LinearLayout>
+</ScrollView>

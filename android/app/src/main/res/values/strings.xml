@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SelectTime</string>
+    <string name="app_subtitle">호계체육관 배드민턴 자동예약</string>
+    <string name="settings">설정</string>
+    <string name="booking">예약 실행</string>
+    <string name="run_now">지금 실행</string>
+    <string name="schedule_open">오픈 시각에 예약하기</string>
+    <string name="save">저장</string>
+    <string name="saved">저장됨</string>
+    <string name="main_status">계정: %1$s\n결제: %2$s\n오픈: %3$s</string>
+    <string name="scheduled">오픈 %1$d초 후 실행되도록 예약했습니다</string>
+    <string name="section_account">AUC 계정</string>
+    <string name="section_prefs">예약 선호</string>
+    <string name="section_payment">결제</string>
+    <string name="hint_auc_id">AUC 아이디</string>
+    <string name="hint_auc_password">AUC 비밀번호</string>
+    <string name="hint_times">선호 시간 (쉼표 구분, 예: 19:00,20:00)</string>
+    <string name="hint_days_ahead">며칠 뒤 이용일 (기본 7)</string>
+    <string name="hint_open_hour">오픈 시 (기본 15)</string>
+    <string name="hint_open_minute">오픈 분 (기본 0)</string>
+    <string name="hint_url">예약 URL</string>
+    <string name="hint_card_number">카드번호</string>
+    <string name="hint_card_expiry">유효기간 (MM/YY)</string>
+    <string name="hint_card_cvc">CVC</string>
+    <string name="hint_card_password">카드 비밀번호 앞 2자리</string>
+    <string name="hint_card_birth">생년월일 (YYMMDD)</string>
+    <string name="notif_channel">예약 알림</string>
+    <string name="notif_channel_desc">대기열·결제·완료 알림</string>
+    <string name="notif_queue">TRACER 대기열 대기 중</string>
+    <string name="notif_appcard">앱카드 승인이 필요합니다. 카드 앱에서 승인하세요.</string>
+    <string name="notif_otp">추가 인증이 필요합니다. 화면에서 완료하세요.</string>
+    <string name="notif_starting">예약 자동화 시작</string>
+    <string-array name="payment_methods">
+        <item>카드 (card)</item>
+        <item>앱카드 (app_card)</item>
+    </string-array>
+</resources>

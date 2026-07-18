@@ -1,0 +1,31 @@
+# Copy to desktop/config.local.yaml (gitignored) or import into the Android app settings.
+# Never put passwords or card numbers in this file.
+
+facility:
+  name: "호계배드민턴장"
+  reservation_url: "https://www.auc.or.kr/reservation/program/facility/calendar1?facilityCategoryNo=1&menuLevel=2&menuNo=403"
+
+target:
+  # Book the slot that opens today for use-date = today + days_ahead
+  days_ahead: 7
+  preferred_times:
+    - "19:00"
+    - "20:00"
+    - "18:00"
+  preferred_courts: []   # e.g. ["1코트", "2코트"] — empty means any available
+
+schedule:
+  open_hour: 15
+  open_minute: 0
+  lead_seconds: 30
+
+payment:
+  # card | app_card
+  method: card
+  installment_months: 0
+
+retry:
+  max_attempts: 20
+  interval_seconds: 2
+
+headless: false
