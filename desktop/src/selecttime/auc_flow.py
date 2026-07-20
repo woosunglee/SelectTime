@@ -5,7 +5,7 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-from playwright.sync_api import Browser, Page, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
 from .config import AppConfig
 from .notify import notify
@@ -43,16 +43,82 @@ class AucFlow:
 
     def run(self, *, dry_run: bool = False) -> bool:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.cfg.headless)
+            # Prefer attaching to a normal Edge the user already opened (best vs MBUSTER).
+            if self.cfg.cdp_url:
+                log.info("Connecting over CDP: %s", self.cfg.cdp_url)
+                browser = p.chromium.connect_over_cdp(self.cfg.cdp_url)
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
+                page = context.pages[0] if context.pages else context.new_page()
+                try:
+                    return self._run_on_page(page, browser, dry_run=dry_run)
+                finally:
+                    # Do not close the user's browser when attached via CDP
+                    pass
+
+            profile_dir = self._profile_dir()
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+            ]
+            ignore_args = ["--enable-automation"]
+
+            if self.cfg.persistent_profile and self.cfg.browser in ("msedge", "chrome", "chromium"):
+                log.info(
+                    "Persistent profile browser=%s dir=%s",
+                    self.cfg.browser,
+                    profile_dir,
+                )
+                context_kwargs: dict = {
+                    "user_data_dir": str(profile_dir),
+                    "headless": self.cfg.headless,
+                    "locale": "ko-KR",
+                    "viewport": {"width": 1280, "height": 900},
+                    "ignore_default_args": ignore_args,
+                    "args": launch_args,
+                }
+                if self.cfg.browser in ("msedge", "chrome"):
+                    context_kwargs["channel"] = self.cfg.browser
+                context = p.chromium.launch_persistent_context(**context_kwargs)
+                page = context.pages[0] if context.pages else context.new_page()
+                try:
+                    # Soften navigator.webdriver for sites that check it
+                    page.add_init_script(
+                        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                    )
+                    return self._run_on_page(page, context, dry_run=dry_run)
+                finally:
+                    context.close()
+
+            launch_kwargs: dict = {
+                "headless": self.cfg.headless,
+                "ignore_default_args": ignore_args,
+                "args": launch_args,
+            }
+            if self.cfg.browser in ("msedge", "chrome"):
+                launch_kwargs["channel"] = self.cfg.browser
+            log.info("Launching browser channel=%s headless=%s", self.cfg.browser, self.cfg.headless)
+            browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context(locale="ko-KR", viewport={"width": 1280, "height": 900})
             page = context.new_page()
+            page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            )
             try:
                 return self._run_on_page(page, browser, dry_run=dry_run)
             finally:
                 context.close()
                 browser.close()
 
-    def _run_on_page(self, page: Page, browser: Browser, *, dry_run: bool) -> bool:
+    def _profile_dir(self) -> Path:
+        if self.cfg.user_data_dir:
+            path = Path(self.cfg.user_data_dir)
+        else:
+            path = Path(__file__).resolve().parents[2] / ".browser-profile" / self.cfg.browser
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _run_on_page(
+        self, page: Page, browser: Browser | BrowserContext, *, dry_run: bool
+    ) -> bool:
         notify("SelectTime", "예약 페이지 접속 중…")
         page.goto(self.cfg.facility.reservation_url, wait_until="domcontentloaded", timeout=60_000)
         self._wait_tracer(page)
@@ -117,11 +183,21 @@ class AucFlow:
             )
             blocked = any(
                 x in content
-                for x in ("서비스 접속이 차단", "접속이 불가능합니다", "접속량이 많아")
+                for x in (
+                    "서비스 접속이 차단",
+                    "접속이 불가능합니다",
+                    "접속량이 많아",
+                    "비정상적인 접근",
+                    "MBUSTER",
+                )
             )
             if blocked:
-                notify("SelectTime", "접속이 차단/불가 상태입니다. 잠시 후 재시도하세요.")
-                page.wait_for_timeout(5000)
+                notify(
+                    "SelectTime",
+                    "MBUSTER 차단 감지. Edge를 모두 종료한 뒤 다시 시도하거나, "
+                    "수동 Edge(원격디버깅)에 연결하세요. README의 cdp_url 안내 참고.",
+                )
+                page.wait_for_timeout(8000)
                 page.reload(wait_until="domcontentloaded")
                 continue
             if waiting:
@@ -255,6 +331,32 @@ class AucFlow:
         return False
 
     def _confirm_reservation(self, page: Page) -> bool:
+        # AUC register modal: "등록하시겠습니까?" → blue "예"
+        try:
+            body = page.inner_text("body") or ""
+        except Exception:  # noqa: BLE001
+            body = ""
+        if "등록하시겠습니까" in body or "선택하신 날짜" in body:
+            for sel in [
+                "button:has-text('예')",
+                "a:has-text('예')",
+                "text=예",
+                "button:has-text('확인')",
+            ]:
+                loc = page.locator(sel)
+                try:
+                    if loc.count() and loc.first.is_visible():
+                        # Avoid clicking "아니오"
+                        label = (loc.first.inner_text() or "").strip()
+                        if "아니오" in label:
+                            continue
+                        if label in ("예", "확인", "등록") or label.startswith("예"):
+                            loc.first.click(timeout=3000)
+                            page.wait_for_timeout(1500)
+                            return True
+                except Exception:  # noqa: BLE001
+                    continue
+
         for sel in [
             "button:has-text('예약')",
             "a:has-text('예약')",
@@ -267,6 +369,16 @@ class AucFlow:
                 if loc.count() and loc.first.is_visible():
                     loc.first.click(timeout=3000)
                     page.wait_for_timeout(1500)
+                    # Modal may appear after reserve click
+                    try:
+                        body2 = page.inner_text("body") or ""
+                    except Exception:  # noqa: BLE001
+                        body2 = ""
+                    if "등록하시겠습니까" in body2 or "선택하신 날짜" in body2:
+                        yes = page.locator("button:has-text('예'), a:has-text('예')")
+                        if yes.count() and yes.first.is_visible():
+                            yes.first.click(timeout=3000)
+                            page.wait_for_timeout(1500)
                     return True
             except Exception:  # noqa: BLE001
                 continue

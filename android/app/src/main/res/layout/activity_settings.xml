@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -9,54 +11,360 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="@string/section_account" android:textStyle="bold" />
-        <EditText android:id="@+id/inputAucId" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_auc_id"
-            android:inputType="text" />
-        <EditText android:id="@+id/inputAucPassword" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_auc_password"
-            android:inputType="textPassword" />
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp">
 
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="12dp" android:text="@string/section_prefs" android:textStyle="bold" />
-        <EditText android:id="@+id/inputPreferredTimes" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_times" />
-        <EditText android:id="@+id/inputDaysAhead" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_days_ahead"
-            android:inputType="number" />
-        <EditText android:id="@+id/inputOpenHour" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_open_hour"
-            android:inputType="number" />
-        <EditText android:id="@+id/inputOpenMinute" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_open_minute"
-            android:inputType="number" />
-        <EditText android:id="@+id/inputReservationUrl" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_url"
-            android:inputType="textUri" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_title"
+                android:textColor="@color/text"
+                android:textSize="20sp"
+                android:textStyle="bold" />
 
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:layout_marginTop="12dp" android:text="@string/section_payment" android:textStyle="bold" />
-        <Spinner android:id="@+id/spinnerPayment" android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-        <EditText android:id="@+id/inputCardNumber" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_card_number"
-            android:inputType="number" />
-        <EditText android:id="@+id/inputCardExpiry" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_card_expiry"
-            android:inputType="text" />
-        <EditText android:id="@+id/inputCardCvc" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_card_cvc"
-            android:inputType="numberPassword" />
-        <EditText android:id="@+id/inputCardPassword" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_card_password"
-            android:inputType="numberPassword" />
-        <EditText android:id="@+id/inputCardBirth" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="@string/hint_card_birth"
-            android:inputType="number" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_alignParentEnd="true"
+                android:text="@string/material_ui_badge"
+                android:textColor="@color/accent"
+                android:textSize="12sp" />
+        </RelativeLayout>
 
-        <Button android:id="@+id/btnSave" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:layout_marginTop="16dp"
-            android:text="@string/save" />
+        <!-- Login -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_login"
+                android:textColor="@color/text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="10dp"
+                android:text="@string/login_help"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/inputAucId"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/hint_auc_id"
+                android:inputType="text"
+                android:importantForAutofill="no" />
+
+            <RelativeLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp">
+
+                <EditText
+                    android:id="@+id/inputAucPassword"
+                    style="@style/SelectTimeInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/hint_auc_password"
+                    android:inputType="textPassword"
+                    android:paddingEnd="52dp"
+                    android:importantForAutofill="no" />
+
+                <ImageButton
+                    android:id="@+id/btnTogglePassword"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_alignParentEnd="true"
+                    android:layout_centerVertical="true"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/toggle_password"
+                    android:src="@drawable/ic_visibility_off"
+                    android:tint="@color/text_muted" />
+            </RelativeLayout>
+        </LinearLayout>
+
+        <!-- Today clock + use date -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/label_today_now"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/textTodayNow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textColor="@color/accent"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/label_use_date_today"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/inputUseDate"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:hint="@string/hint_use_date"
+                android:inputType="date" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/open_hint"
+                android:textColor="@color/warn"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- Reservation -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_reservation"
+                android:textColor="@color/text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/label_weekdays"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <TextView android:id="@+id/dayMon" style="@style/SelectTimeDayChip" android:text="월" />
+                <TextView android:id="@+id/dayTue" style="@style/SelectTimeDayChip" android:text="화" />
+                <TextView android:id="@+id/dayWed" style="@style/SelectTimeDayChip" android:text="수" />
+                <TextView android:id="@+id/dayThu" style="@style/SelectTimeDayChip" android:text="목" />
+                <TextView android:id="@+id/dayFri" style="@style/SelectTimeDayChip" android:text="금" />
+                <TextView android:id="@+id/daySat" style="@style/SelectTimeDayChip" android:text="토" />
+                <TextView android:id="@+id/daySun" style="@style/SelectTimeDayChip" android:text="일" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/label_times"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/inputPreferredTimes"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:clickable="true"
+                android:focusable="false"
+                android:hint="@string/hint_times" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/label_courts"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/inputPreferredCourts"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:clickable="true"
+                android:focusable="false"
+                android:hint="@string/hint_courts" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <CheckBox
+                    android:id="@+id/checkAutoCourt"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:buttonTint="@color/accent" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_auto_court"
+                    android:textColor="@color/text"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Payment -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_payment"
+                android:textColor="@color/text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/label_payment_method"
+                android:textColor="@color/text"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/inputPaymentMethod"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:focusable="false"
+                android:clickable="true"
+                android:hint="@string/label_payment_method"
+                android:importantForAutofill="no" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/label_card_issuer"
+                android:textColor="@color/text"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/hint_card_issuer"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp" />
+
+            <EditText
+                android:id="@+id/inputCardIssuer"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:focusable="false"
+                android:clickable="true"
+                android:hint="@string/hint_pick_card_issuer"
+                android:importantForAutofill="no" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/fee_estimate"
+                android:textColor="@color/accent"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <CheckBox
+                    android:id="@+id/checkAutoToPayment"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:buttonTint="@color/accent" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_auto_to_payment"
+                    android:textColor="@color/text"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <CheckBox
+                    android:id="@+id/checkAutoClickPay"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:buttonTint="@color/accent" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/label_auto_click_pay"
+                    android:textColor="@color/text"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnSave"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:backgroundTint="@color/accent"
+            android:text="@string/save"
+            android:textColor="@color/bg"
+            android:textStyle="bold" />
     </LinearLayout>
 </ScrollView>

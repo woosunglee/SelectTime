@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <queries>
         <!-- Common card issuer / pay apps for app-card intents -->
@@ -48,9 +51,15 @@
             android:label="@string/settings" />
 
         <activity
+            android:name=".QuickBookActivity"
+            android:exported="false"
+            android:label="@string/quick_book" />
+
+        <activity
             android:name=".BookingActivity"
             android:exported="false"
-            android:label="@string/booking" />
+            android:label="@string/booking"
+            android:launchMode="singleTask" />
 
         <activity
             android:name=".MainActivity"
@@ -65,5 +74,24 @@
             android:name=".BookingForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".OpenAlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.selecttime.hogye.action.OPEN_PREALERT" />
+                <action android:name="com.selecttime.hogye.action.OPEN_WARM" />
+                <action android:name="com.selecttime.hogye.action.OPEN_STRIKE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

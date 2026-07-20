@@ -13,6 +13,7 @@ desktop/venv/
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/
+desktop/.browser-profile/
 desktop/logs/
 desktop/.playwright/
 desktop/screenshots/

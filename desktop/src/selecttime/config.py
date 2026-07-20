@@ -53,6 +53,13 @@ class AppConfig:
     payment: PaymentConfig
     retry: RetryConfig
     headless: bool = False
+    # chromium = Playwright bundle; chrome / msedge = installed browser
+    browser: str = "msedge"
+    # Use a persistent Edge/Chrome profile (reduces MBUSTER automation blocks)
+    persistent_profile: bool = True
+    # Optional: attach to an already-running browser, e.g. http://127.0.0.1:9222
+    cdp_url: str = ""
+    user_data_dir: str = ""
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -122,7 +129,26 @@ def load_config(path: Path | None = None) -> AppConfig:
             interval_seconds=float(retry.get("interval_seconds", 2)),
         ),
         headless=bool(raw.get("headless", False)),
+        browser=_normalize_browser(str(raw.get("browser", "msedge"))),
+        persistent_profile=bool(raw.get("persistent_profile", True)),
+        cdp_url=str(raw.get("cdp_url", "") or "").strip(),
+        user_data_dir=str(raw.get("user_data_dir", "") or "").strip(),
     )
+
+
+def _normalize_browser(value: str) -> str:
+    browser = value.strip().lower()
+    aliases = {
+        "edge": "msedge",
+        "msedge": "msedge",
+        "chrome": "chrome",
+        "google-chrome": "chrome",
+        "chromium": "chromium",
+        "": "msedge",
+    }
+    if browser not in aliases:
+        raise ValueError("browser must be one of: msedge, chrome, chromium")
+    return aliases[browser]
 
 
 def env(name: str, default: str = "") -> str:

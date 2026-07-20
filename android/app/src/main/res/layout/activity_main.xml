@@ -2,6 +2,7 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/bg"
     android:orientation="vertical"
     android:padding="20dp">
 
@@ -9,6 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="@string/app_name"
+        android:textColor="@color/text"
         android:textSize="22sp"
         android:textStyle="bold" />
 
@@ -16,31 +18,68 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="@string/app_subtitle" />
+        android:text="@string/app_subtitle"
+        android:textColor="@color/text_muted" />
 
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
+        android:textColor="@color/accent"
         android:textSize="14sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:text="@string/label_today_now"
+        android:textColor="@color/text_muted"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/textTodayNow"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:textColor="@color/text"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/textScheduleStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:background="@drawable/bg_card"
+        android:padding="12dp"
+        android:textColor="@color/warn"
+        android:textSize="13sp" />
 
     <Button
         android:id="@+id/btnSettings"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="24dp"
-        android:text="@string/settings" />
+        android:backgroundTint="@color/card"
+        android:text="@string/settings"
+        android:textColor="@color/text" />
 
     <Button
-        android:id="@+id/btnRunNow"
+        android:id="@+id/btnQuickBook"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/run_now" />
+        android:layout_marginTop="8dp"
+        android:backgroundTint="@color/accent"
+        android:text="@string/quick_book"
+        android:textColor="@color/bg" />
 
     <Button
         android:id="@+id/btnSchedule"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/schedule_open" />
+        android:layout_marginTop="8dp"
+        android:backgroundTint="@color/card"
+        android:text="@string/schedule_open"
+        android:textColor="@color/text" />
 </LinearLayout>

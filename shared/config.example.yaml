@@ -12,7 +12,11 @@ target:
     - "19:00"
     - "20:00"
     - "18:00"
-  preferred_courts: []   # e.g. ["1코트", "2코트"] — empty means any available
+  preferred_courts: []   # e.g. ["5코트", "6코트"] — empty means any available (white checkbox)
+  # Hogye badminton party / fee reduction defaults
+  party_size: 6
+  discount_senior: 2      # 경로우대
+  discount_multi_child: 2 # 안양시 다자녀
 
 schedule:
   open_hour: 15
@@ -29,3 +33,19 @@ retry:
   interval_seconds: 2
 
 headless: false
+
+# Browser: msedge (Windows Edge, recommended) | chrome | chromium (Playwright download)
+browser: msedge
+
+# Use a dedicated persistent profile (cookies survive). Close all Edge windows first.
+persistent_profile: true
+
+# Optional: attach to Edge you started yourself (best against MBUSTER):
+# 1) Close all Edge windows
+# 2) Run:
+#    & "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222 --user-data-dir="$env:TEMP\selecttime-edge"
+# 3) In that window open auc.or.kr and log in once
+# 4) Set:
+# cdp_url: "http://127.0.0.1:9222"
+cdp_url: ""
+user_data_dir: ""

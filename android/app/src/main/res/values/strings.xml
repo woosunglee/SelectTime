@@ -3,36 +3,117 @@
     <string name="app_name">SelectTime</string>
     <string name="app_subtitle">호계체육관 배드민턴 자동예약</string>
     <string name="settings">설정</string>
+    <string name="settings_title">[환경설정 및 결제수단]</string>
+    <string name="material_ui_badge">Material UI</string>
     <string name="booking">예약 실행</string>
+    <string name="booking_subtitle">카드 결제 입력</string>
     <string name="run_now">지금 실행</string>
+    <string name="quick_book">특정 날짜/시간 예약</string>
+    <string name="quick_book_title">[특정 날짜·시간 예약]</string>
+    <string name="quick_book_help">이용일과 시간을 고르면 통합 로그인 → 코트 선택 → 결제까지 자동 진행합니다.</string>
+    <string name="label_pick_date">이용일</string>
+    <string name="label_pick_date_today">이용일 (오늘 날짜·시간)</string>
+    <string name="label_pick_time">입장 회차 (호계 배드민턴)</string>
+    <string name="hint_pick_time">탭하여 타임 선택</string>
+    <string name="quick_use_date_live">이용일 = 오늘 %1$s</string>
+    <string name="hogye_slots_weekday">월~토 입장회차 (90분)</string>
+    <string name="hogye_slots_sunday">일·공휴일 입장회차 (90분)</string>
+    <string name="quick_book_notice">설정에 저장한 계정·결제수단을 사용합니다. 결제 자동진행이 켜집니다.</string>
+    <string name="quick_book_start">자동 로그인·결제 시작</string>
+    <string name="quick_book_need_login">먼저 설정에서 통합 아이디/비밀번호를 저장하세요.</string>
+    <string name="quick_book_bad_date">이용일을 YYYY-MM-DD 형식으로 선택하세요.</string>
+    <string name="quick_book_bad_time">호계 입장회차를 선택하세요.</string>
+    <string name="quick_book_running">특정예약 %1$s %2$s — 로그인·결제 진행</string>
     <string name="schedule_open">오픈 시각에 예약하기</string>
+    <string name="schedule_stop">오픈 예약 실행 중지</string>
+    <string name="schedule_waiting">오픈 예약: 대기 중\n설정 요일: %1$s\n다음 오픈: %2$s\n이용일: %3$s (%4$s)</string>
+    <string name="schedule_running">오픈 예약: 대기 중\n설정 요일: %1$s\n다음 오픈: %2$s\n이용일: %3$s (%4$s)</string>
+    <string name="schedule_preview">오픈 예약: 대기 아님\n설정 요일: %1$s\n다음에 잡을 오픈: %2$s\n이용일: %3$s (%4$s)\n아래 버튼으로 예약하세요.</string>
+    <string name="schedule_missed">오픈 시각을 놓침 (알람 미실행)\n예정: %1$s\n이용일: %2$s\n앱을 열면 복구를 시도합니다.</string>
+    <string name="schedule_not_running">오픈 시각 예약하기: 실행 중이 아님\n설정에서 이용 요일을 고른 뒤, 아래 버튼으로 다음 오픈(요일 7일 전 15:00)을 예약하세요.</string>
+    <string name="schedule_armed_toast">대기 중 — %1$s에 자동 시작 (이용일 %2$s)</string>
+    <string name="schedule_armed_toast_warm">예약됨 — %1$s 오픈 (이용일 %2$s %3$s)\n설정 요일 %4$s\n· 15분 전: 알람 알림 + 앱 실행\n· %5$s: 사전 로그인 자동 시작\n· 정각: 예약 자동 실행\n상태바에 알람 시계가 보여야 정상입니다.</string>
+    <string name="notif_alarm_channel">오픈 예약 알람</string>
+    <string name="notif_alarm_channel_desc">오픈 전 알람·자동 실행 알림 (소리·진동)</string>
+    <string name="notif_prealert_title">곧 오픈 예약</string>
+    <string name="notif_prealert_body">%1$s 오픈 예약이 곧 시작됩니다 (이용일 %2$s). 앱을 확인하세요.</string>
+    <string name="notif_warm_alarm_title">오픈 사전준비 시작</string>
+    <string name="notif_strike_alarm_title">오픈! 예약 자동 실행</string>
+    <string name="schedule_stopped_toast">오픈 시각 예약을 중지했습니다</string>
+    <string name="schedule_catchup_toast">놓친 오픈 예약을 지금 이어서 실행합니다</string>
+    <string name="schedule_missed_reschedule_toast">지난 오픈을 놓쳐 다음 오픈으로 다시 예약합니다</string>
+    <string name="schedule_need_weekdays">설정에서 이용할 요일을 하나 이상 선택한 뒤 저장하세요.</string>
+    <string name="warm_running">오픈 사전준비 %1$s — 로그인·달력 대기</string>
+    <string name="notif_warm_start">오픈 사전준비 시작 (이용일 %1$s)</string>
+    <string name="exact_alarm_permission_hint">정확한 오픈 시각 실행을 위해 「알람 및 리마인더」 권한을 허용해 주세요.</string>
+    <string name="exact_alarm_required">「알람 및 리마인더」를 허용한 뒤 다시 「오픈 시각에 예약하기」를 눌러 주세요.</string>
+    <string name="battery_opt_hint">배터리 최적화 제외를 허용해야 백그라운드에서도 오픈 시각에 실행됩니다.</string>
     <string name="save">저장</string>
     <string name="saved">저장됨</string>
-    <string name="main_status">계정: %1$s\n결제: %2$s\n오픈: %3$s</string>
+    <string name="main_status">계정: %1$s\n결제: %2$s\n오픈: %3$s\n이용 요일: %4$s</string>
     <string name="scheduled">오픈 %1$d초 후 실행되도록 예약했습니다</string>
-    <string name="section_account">AUC 계정</string>
-    <string name="section_prefs">예약 선호</string>
-    <string name="section_payment">결제</string>
-    <string name="hint_auc_id">AUC 아이디</string>
-    <string name="hint_auc_password">AUC 비밀번호</string>
-    <string name="hint_times">선호 시간 (쉼표 구분, 예: 19:00,20:00)</string>
-    <string name="hint_days_ahead">며칠 뒤 이용일 (기본 7)</string>
-    <string name="hint_open_hour">오픈 시 (기본 15)</string>
-    <string name="hint_open_minute">오픈 분 (기본 0)</string>
-    <string name="hint_url">예약 URL</string>
+
+    <string name="section_login">🔐 [통합 로그인 설정]</string>
+    <string name="login_help">통합 아이디/비밀번호를 저장하면 자동화 시작 시 로그인 폼에 입력합니다.</string>
+    <string name="section_reservation">[예약 설정]</string>
+    <string name="section_payment">[결제 설정]</string>
+
+    <string name="hint_auc_id">통합 아이디</string>
+    <string name="hint_auc_password">통합 비밀번호</string>
+    <string name="toggle_password">비밀번호 표시/숨기기</string>
+    <string name="hint_use_date">오늘 날짜 YYYY-MM-DD (비우면 요일 반복)</string>
+    <string name="label_today_now">오늘 날짜와 시간 (현재)</string>
+    <string name="label_use_date_today">이용일 (오늘 날짜 기준)</string>
+    <string name="today_now_format">오늘 %1$s</string>
+    <string name="open_hint">연계 안내: 설정한 이용 요일 기준, 그 요일의 7일 전 15:00에 예약이 열립니다.</string>
+    <string name="label_weekdays">이용할 요일 (오픈 = 해당 요일 7일 전 15:00)</string>
+    <string name="label_times">선호 입장회차 (호계 배드민턴)</string>
+    <string name="hint_times">탭하여 타임 선택 (예: 2타임)</string>
+    <string name="label_courts">선호 코트 우선순위</string>
+    <string name="hint_courts">탭하여 코트 선택 (1~12코트)</string>
+    <string name="hint_pick_courts">코트를 하나 이상 선택하세요</string>
+    <string name="label_auto_court">선호 코트 없으면 가능한 코트 자동 선택</string>
+    <string name="fee_estimate">이용 요금 예측: 시간당 3,000원</string>
+    <string name="label_auto_to_payment">결제 페이지까지 자동 진행</string>
+    <string name="label_auto_click_pay">결제 버튼까지 자동 클릭</string>
     <string name="hint_card_number">카드번호</string>
     <string name="hint_card_expiry">유효기간 (MM/YY)</string>
     <string name="hint_card_cvc">CVC</string>
     <string name="hint_card_password">카드 비밀번호 앞 2자리</string>
     <string name="hint_card_birth">생년월일 (YYMMDD)</string>
+
     <string name="notif_channel">예약 알림</string>
     <string name="notif_channel_desc">대기열·결제·완료 알림</string>
     <string name="notif_queue">TRACER 대기열 대기 중</string>
     <string name="notif_appcard">앱카드 승인이 필요합니다. 카드 앱에서 승인하세요.</string>
     <string name="notif_otp">추가 인증이 필요합니다. 화면에서 완료하세요.</string>
     <string name="notif_starting">예약 자동화 시작</string>
+    <string name="notif_login_fail">로그인정보가 잘못되었습니다. 설정에서 통합 아이디/비밀번호를 확인하세요.</string>
+
+    <string name="label_payment_method">결제 수단</string>
+    <string name="label_card_issuer">카드사 선택 (EasyPAY)</string>
+    <string name="hint_card_issuer">결제 화면에서 자동으로 선택할 카드사</string>
+    <string name="hint_pick_card_issuer">탭하여 카드사 선택</string>
+    <string name="label_order_terms_auto">주문자 약관 전체동의 자동</string>
+
     <string-array name="payment_methods">
-        <item>카드 (card)</item>
-        <item>앱카드 (app_card)</item>
+        <item>신용카드</item>
+        <item>앱카드</item>
+    </string-array>
+
+    <string-array name="card_issuers">
+        <item>(선택 안 함)</item>
+        <item>KB국민카드</item>
+        <item>하나카드</item>
+        <item>신한(SOL페이)</item>
+        <item>롯데카드</item>
+        <item>농협(NH페이)</item>
+        <item>우리카드</item>
+        <item>비씨(페이북)</item>
+        <item>삼성카드</item>
+        <item>현대카드</item>
+        <item>KB Pay</item>
+        <item>카카오페이</item>
+        <item>네이버페이</item>
     </string-array>
 </resources>
