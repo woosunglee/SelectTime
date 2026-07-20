@@ -20,11 +20,11 @@ jobs:
           java-version: '17'
 
       - name: Create local.properties
-        working-directory: ./SelectTime/android
+        working-directory: ./SelectTIme/android
         run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Grant execute permission and build
-        working-directory: ./SelectTime/android
+        working-directory: ./SelectTIme/android
         run: |
           chmod +x ./gradlew
           ./gradlew assembleDebug --stacktrace --info
@@ -33,4 +33,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk
-          path: SelectTime/android/app/build/outputs/apk/debug/app-debug.apk
+          path: SelectTIme/android/app/build/outputs/apk/debug/app-debug.apk
