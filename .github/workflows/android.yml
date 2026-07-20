@@ -19,15 +19,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: List files for debugging
-        run: ls -laR
+      - name: Create local.properties
+        working-directory: ./SelectTIme/android
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: Grant execute permission and build
         working-directory: ./SelectTIme/android
         run: |
-          ls -la  # Verify gradlew is here
           chmod +x ./gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace --info
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
