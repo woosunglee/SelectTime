@@ -10,8 +10,8 @@ import android.util.Log;
 /**
  * Open-time alarms (AlarmClock = exact + Doze-exempt + auto-start Activity):
  * <ul>
- *   <li>PREALERT (~15분 전): 소리/진동 알람 알림</li>
- *   <li>WARM (~10분 전): 앱 자동 실행 → 로그인·달력 준비</li>
+ *   <li>PREALERT (~4분 전): 소리/진동 알람 알림</li>
+ *   <li>WARM (~3분 전): 앱 자동 실행 → 로그인·달력 준비</li>
  *   <li>STRIKE (정각): 앱 자동 실행 → 슬롯 클릭</li>
  * </ul>
  */
@@ -30,9 +30,9 @@ public final class OpenAlarmScheduler {
     public static final int REQ_SHOW_OPEN = 7112;
 
     /** Loud heads-up alarm before warm. */
-    public static final long PREALERT_LEAD_MS = 15 * 60 * 1000L;
+    public static final long PREALERT_LEAD_MS = 4 * 60 * 1000L;
     /** Start login/calendar this many ms before open. */
-    public static final long WARM_LEAD_MS = 10 * 60 * 1000L;
+    public static final long WARM_LEAD_MS = 2 * 60 * 1000L + 30 * 1000L; // 2.5 mins
 
     private OpenAlarmScheduler() {
     }

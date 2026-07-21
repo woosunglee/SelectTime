@@ -1,6 +1,7 @@
 package com.selecttime.hogye;
 
 import android.annotation.SuppressLint;
+import android.app.NotificationManager;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
@@ -30,6 +31,10 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
     private long openAtMs;
     private boolean fromAlarm;
 
+    private String overrideUseDate;
+    private String overridePreferredTimes;
+    private String overridePreferredCourts;
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,11 +42,15 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
         setContentView(R.layout.activity_booking);
         statusView = findViewById(R.id.bookingStatus);
 
+        clearNotifications();
         applyIntentOverrides(getIntent());
         onAlarmLaunchIfNeeded();
 
         WebView webView = findViewById(R.id.webView);
         automator = new AucWebAutomator(this, webView, this);
+        if (overrideUseDate != null || overridePreferredTimes != null || overridePreferredCourts != null) {
+            automator.setOverrides(overrideUseDate, overridePreferredTimes, overridePreferredCourts);
+        }
         startForMode();
     }
 
@@ -60,10 +69,14 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        clearNotifications();
         applyIntentOverrides(intent);
         onAlarmLaunchIfNeeded();
         if (automator == null) {
             return;
+        }
+        if (overrideUseDate != null || overridePreferredTimes != null || overridePreferredCourts != null) {
+            automator.setOverrides(overrideUseDate, overridePreferredTimes, overridePreferredCourts);
         }
         if (MODE_STRIKE.equals(openMode)) {
             chainNextOpenAfterStrike();
@@ -133,13 +146,13 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
         openAtMs = intent.getLongExtra(EXTRA_OPEN_AT_MS, 0L);
 
         if (intent.hasExtra(EXTRA_USE_DATE)) {
-            store.put(SecureStore.KEY_USE_DATE, intent.getStringExtra(EXTRA_USE_DATE));
+            overrideUseDate = intent.getStringExtra(EXTRA_USE_DATE);
         }
         if (intent.hasExtra(EXTRA_PREFERRED_TIMES)) {
-            store.put(SecureStore.KEY_PREFERRED_TIMES, intent.getStringExtra(EXTRA_PREFERRED_TIMES));
+            overridePreferredTimes = intent.getStringExtra(EXTRA_PREFERRED_TIMES);
         }
         if (intent.hasExtra(EXTRA_PREFERRED_COURTS)) {
-            store.put(SecureStore.KEY_PREFERRED_COURTS, intent.getStringExtra(EXTRA_PREFERRED_COURTS));
+            overridePreferredCourts = intent.getStringExtra(EXTRA_PREFERRED_COURTS);
         }
         if (intent.hasExtra(EXTRA_AUTO_TO_PAYMENT)) {
             store.putBool(SecureStore.KEY_AUTO_TO_PAYMENT,
@@ -154,8 +167,10 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
             store.putBool(SecureStore.KEY_AUTO_TO_PAYMENT, true);
             store.putBool(SecureStore.KEY_AUTO_CLICK_PAY, true);
             store.putBool(SecureStore.KEY_AUTO_COURT, true);
-            String date = store.get(SecureStore.KEY_USE_DATE, "");
-            String time = store.get(SecureStore.KEY_PREFERRED_TIMES, "");
+            
+            String date = (overrideUseDate != null) ? overrideUseDate : store.get(SecureStore.KEY_USE_DATE, "");
+            String time = (overridePreferredTimes != null) ? overridePreferredTimes : store.get(SecureStore.KEY_PREFERRED_TIMES, "");
+            
             if (MODE_WARM.equals(openMode)) {
                 statusView.setText(getString(R.string.warm_running, date));
             } else {
@@ -172,5 +187,15 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
     @Override
     public void onFinished(boolean success, String message) {
         statusView.setText(message);
+    }
+
+    private void clearNotifications() {
+        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm != null) {
+            nm.cancel(NotifyHelper.NOTIF_PREALERT);
+            nm.cancel(NotifyHelper.NOTIF_OPEN_LAUNCH);
+            // Optionally clear all if needed
+            // nm.cancelAll();
+        }
     }
 }

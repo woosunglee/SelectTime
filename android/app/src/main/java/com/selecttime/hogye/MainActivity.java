@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -19,7 +20,9 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.webkit.WebViewCompat;
 
+import android.content.pm.PackageInfo;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -55,6 +58,8 @@ public class MainActivity extends AppCompatActivity {
         store = new SecureStore(this);
         NotifyHelper.ensureChannel(this);
         requestNotifPermission();
+
+        logWebViewVersion();
 
         statusView = findViewById(R.id.statusText);
         todayNowView = findViewById(R.id.textTodayNow);
@@ -239,14 +244,9 @@ public class MainActivity extends AppCompatActivity {
         OpenAlarmScheduler.scheduleNext(this, next);
 
         long warmAt = next.openAtMillis - OpenAlarmScheduler.WARM_LEAD_MS;
-        long preAt = next.openAtMillis - OpenAlarmScheduler.PREALERT_LEAD_MS;
         String warmHint = warmAt > System.currentTimeMillis()
                 ? new SimpleDateFormat("HH:mm", Locale.KOREAN).format(new Date(warmAt))
                 : "곧";
-        if (preAt > System.currentTimeMillis()) {
-            warmHint = new SimpleDateFormat("HH:mm", Locale.KOREAN).format(new Date(preAt))
-                    + " 알람 → " + warmHint;
-        }
         String msg = getString(R.string.schedule_armed_toast_warm,
                 next.openLabel, next.useDate, next.useWeekdayLabel,
                 next.preferredLabel, warmHint);
@@ -314,6 +314,13 @@ public class MainActivity extends AppCompatActivity {
                     != PackageManager.PERMISSION_GRANTED) {
                 notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
             }
+        }
+    }
+
+    private void logWebViewVersion() {
+        PackageInfo info = WebViewCompat.getCurrentWebViewPackage(this);
+        if (info != null) {
+            Log.i("SelectTime", "Current WebView Package: " + info.packageName + " version=" + info.versionName);
         }
     }
 }

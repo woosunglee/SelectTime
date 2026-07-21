@@ -43,6 +43,7 @@ public final class PaymentAppCardAutomator {
                             context.getString(R.string.app_name),
                             context.getString(R.string.notif_appcard)
                     );
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     context.startActivity(intent);
                     return true;
                 }
@@ -53,10 +54,12 @@ public final class PaymentAppCardAutomator {
                 }
                 String pkg = intent.getPackage();
                 if (pkg != null) {
-                    context.startActivity(new Intent(
+                    Intent marketIntent = new Intent(
                             Intent.ACTION_VIEW,
                             Uri.parse("market://details?id=" + pkg)
-                    ));
+                    );
+                    marketIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(marketIntent);
                     return true;
                 }
             } else {

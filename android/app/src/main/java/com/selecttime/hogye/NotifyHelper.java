@@ -98,7 +98,7 @@ public final class NotifyHelper {
         }
     }
 
-    /** ~15분 전: 소리·진동 알람 + 앱(메인) 자동 실행용 알림. */
+    /** ~4분 전: 소리·진동 알람 + 앱(메인) 자동 실행용 알림. */
     public static void notifyPreOpenAlarm(Context context, String useDate, long openAtMs) {
         ensureChannel(context);
         Intent main = new Intent(context, MainActivity.class);
@@ -121,7 +121,7 @@ public final class NotifyHelper {
                 .setContentIntent(pi)
                 .setFullScreenIntent(pi, true)
                 .setDefaults(NotificationCompat.DEFAULT_ALL)
-                .setTimeoutAfter(10 * 60 * 1000L);
+                .setTimeoutAfter(4 * 60 * 1000L);
         try {
             NotificationManagerCompat.from(context).notify(NOTIF_PREALERT, b.build());
         } catch (SecurityException ignored) {

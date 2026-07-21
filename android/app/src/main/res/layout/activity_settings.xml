@@ -147,6 +147,83 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <!-- Party and Discount -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:background="@drawable/bg_card"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/section_party"
+                android:textColor="@color/text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:layout_marginBottom="10dp"
+                android:text="@string/party_help"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/label_party_size"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/inputPartySize"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:hint="예: 4"
+                android:inputType="number" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/label_discount_senior"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/inputDiscountSenior"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:hint="예: 2"
+                android:inputType="number" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/label_discount_multi_child"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+
+            <EditText
+                android:id="@+id/inputDiscountMultiChild"
+                style="@style/SelectTimeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:hint="예: 2"
+                android:inputType="number" />
+        </LinearLayout>
+
         <!-- Reservation -->
         <LinearLayout
             android:layout_width="match_parent"

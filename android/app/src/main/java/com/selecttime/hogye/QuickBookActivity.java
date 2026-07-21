@@ -61,6 +61,7 @@ public class QuickBookActivity extends AppCompatActivity {
         Button start = findViewById(R.id.btnQuickStart);
 
         Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.DAY_OF_MONTH, 1);
         year = cal.get(Calendar.YEAR);
         month = cal.get(Calendar.MONTH);
         day = cal.get(Calendar.DAY_OF_MONTH);
@@ -104,23 +105,24 @@ public class QuickBookActivity extends AppCompatActivity {
         String stamp = new SimpleDateFormat("yyyy-MM-dd (E) HH:mm:ss", Locale.KOREAN)
                 .format(new Date());
         todayNowText.setText(getString(R.string.quick_use_date_live, stamp));
-        // Keep 이용일 field showing today's calendar date unless user changed it earlier today.
+        // Keep 이용일 field showing tomorrow's calendar date unless user changed it earlier.
         if (dateInput != null) {
             Calendar cal = Calendar.getInstance();
-            String today = String.format(Locale.US, "%04d-%02d-%02d",
+            cal.add(Calendar.DAY_OF_MONTH, 1);
+            String tomorrow = String.format(Locale.US, "%04d-%02d-%02d",
                     cal.get(Calendar.YEAR),
                     cal.get(Calendar.MONTH) + 1,
                     cal.get(Calendar.DAY_OF_MONTH));
             String cur = dateInput.getText() != null ? dateInput.getText().toString().trim() : "";
-            // Only auto-sync when field still matches the initially opened day selection.
+            // Only auto-sync when field still matches the initially opened 'tomorrow' selection.
             if (cur.isEmpty() || (year == cal.get(Calendar.YEAR)
                     && month == cal.get(Calendar.MONTH)
                     && day == cal.get(Calendar.DAY_OF_MONTH))) {
                 year = cal.get(Calendar.YEAR);
                 month = cal.get(Calendar.MONTH);
                 day = cal.get(Calendar.DAY_OF_MONTH);
-                if (!today.equals(cur)) {
-                    dateInput.setText(today);
+                if (!tomorrow.equals(cur)) {
+                    dateInput.setText(tomorrow);
                 }
             }
         }

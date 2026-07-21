@@ -36,6 +36,9 @@ public class SettingsActivity extends AppCompatActivity {
     private EditText aucId;
     private EditText aucPassword;
     private EditText useDate;
+    private EditText partySize;
+    private EditText discountSenior;
+    private EditText discountMultiChild;
     private TextView todayNowText;
     private EditText preferredTimes;
     private EditText preferredCourts;
@@ -71,6 +74,9 @@ public class SettingsActivity extends AppCompatActivity {
         aucId = findViewById(R.id.inputAucId);
         aucPassword = findViewById(R.id.inputAucPassword);
         useDate = findViewById(R.id.inputUseDate);
+        partySize = findViewById(R.id.inputPartySize);
+        discountSenior = findViewById(R.id.inputDiscountSenior);
+        discountMultiChild = findViewById(R.id.inputDiscountMultiChild);
         todayNowText = findViewById(R.id.textTodayNow);
         preferredTimes = findViewById(R.id.inputPreferredTimes);
         preferredCourts = findViewById(R.id.inputPreferredCourts);
@@ -171,6 +177,11 @@ public class SettingsActivity extends AppCompatActivity {
         aucId.setText(store.get(SecureStore.KEY_AUC_ID, ""));
         aucPassword.setText(store.get(SecureStore.KEY_AUC_PASSWORD, ""));
         syncUseDateToToday();
+
+        partySize.setText(String.valueOf(store.getInt(SecureStore.KEY_PARTY_SIZE, SecureStore.DEFAULT_PARTY_SIZE)));
+        discountSenior.setText(String.valueOf(store.getInt(SecureStore.KEY_DISCOUNT_SENIOR, SecureStore.DEFAULT_DISCOUNT_SENIOR)));
+        discountMultiChild.setText(String.valueOf(store.getInt(SecureStore.KEY_DISCOUNT_MULTI_CHILD, SecureStore.DEFAULT_DISCOUNT_MULTI_CHILD)));
+
         preferredTimesValue = store.get(SecureStore.KEY_PREFERRED_TIMES, "10:40,10:40~12:10");
         preferredCourtsValue = store.get(SecureStore.KEY_PREFERRED_COURTS, "9코트,10코트");
         refreshTimesDisplay();
@@ -344,6 +355,11 @@ public class SettingsActivity extends AppCompatActivity {
         store.put(SecureStore.KEY_AUC_ID, aucId.getText().toString().trim());
         store.put(SecureStore.KEY_AUC_PASSWORD, aucPassword.getText().toString());
         store.put(SecureStore.KEY_USE_DATE, useDate.getText().toString().trim());
+
+        store.putInt(SecureStore.KEY_PARTY_SIZE, getInt(partySize, SecureStore.DEFAULT_PARTY_SIZE));
+        store.putInt(SecureStore.KEY_DISCOUNT_SENIOR, getInt(discountSenior, SecureStore.DEFAULT_DISCOUNT_SENIOR));
+        store.putInt(SecureStore.KEY_DISCOUNT_MULTI_CHILD, getInt(discountMultiChild, SecureStore.DEFAULT_DISCOUNT_MULTI_CHILD));
+
         store.put(SecureStore.KEY_PREFERRED_TIMES, preferredTimesValue);
         store.put(SecureStore.KEY_PREFERRED_COURTS, preferredCourtsValue);
         store.putBool(SecureStore.KEY_AUTO_COURT, autoCourt.isChecked());
@@ -365,6 +381,16 @@ public class SettingsActivity extends AppCompatActivity {
             }
         }
         return String.join(",", days);
+    }
+
+    private int getInt(EditText et, int def) {
+        String s = et.getText().toString().trim();
+        if (s.isEmpty()) return def;
+        try {
+            return Integer.parseInt(s);
+        } catch (Exception e) {
+            return def;
+        }
     }
 
     private void updateDayChipColor(TextView chip) {

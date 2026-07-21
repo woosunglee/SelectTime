@@ -32,7 +32,7 @@
     <string name="schedule_missed">오픈 시각을 놓침 (알람 미실행)\n예정: %1$s\n이용일: %2$s\n앱을 열면 복구를 시도합니다.</string>
     <string name="schedule_not_running">오픈 시각 예약하기: 실행 중이 아님\n설정에서 이용 요일을 고른 뒤, 아래 버튼으로 다음 오픈(요일 7일 전 15:00)을 예약하세요.</string>
     <string name="schedule_armed_toast">대기 중 — %1$s에 자동 시작 (이용일 %2$s)</string>
-    <string name="schedule_armed_toast_warm">예약됨 — %1$s 오픈 (이용일 %2$s %3$s)\n설정 요일 %4$s\n· 15분 전: 알람 알림 + 앱 실행\n· %5$s: 사전 로그인 자동 시작\n· 정각: 예약 자동 실행\n상태바에 알람 시계가 보여야 정상입니다.</string>
+    <string name="schedule_armed_toast_warm">예약됨 — %1$s 오픈 (이용일 %2$s %3$s)\n설정 요일 %4$s\n· 4분 전: 알람 알림 + 앱 실행\n· %5$s: 사전 로그인 자동 시작 (2분 30초 전)\n· 정각: 예약 자동 실행\n상태바에 알람 시계가 보여야 정상입니다.</string>
     <string name="notif_alarm_channel">오픈 예약 알람</string>
     <string name="notif_alarm_channel_desc">오픈 전 알람·자동 실행 알림 (소리·진동)</string>
     <string name="notif_prealert_title">곧 오픈 예약</string>
@@ -55,6 +55,11 @@
 
     <string name="section_login">🔐 [통합 로그인 설정]</string>
     <string name="login_help">통합 아이디/비밀번호를 저장하면 자동화 시작 시 로그인 폼에 입력합니다.</string>
+    <string name="section_party">[사용 인원 및 감면 설정]</string>
+    <string name="party_help">총 인원과 감면 대상 인원을 입력하세요. (감면 없으면 0)</string>
+    <string name="label_party_size">총 사용 인원 (최대 4명)</string>
+    <string name="label_discount_senior">경로우대 감면 인원</string>
+    <string name="label_discount_multi_child">다자녀 감면 인원</string>
     <string name="section_reservation">[예약 설정]</string>
     <string name="section_payment">[결제 설정]</string>
 

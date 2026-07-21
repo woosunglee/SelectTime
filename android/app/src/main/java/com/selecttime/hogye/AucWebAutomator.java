@@ -2,17 +2,29 @@ package com.selecttime.hogye;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.net.http.SslError;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
+import android.webkit.SslErrorHandler;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.webkit.WebSettingsCompat;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import androidx.webkit.WebViewRenderProcess;
+import androidx.webkit.WebViewRenderProcessClient;
 
 import org.json.JSONObject;
 
@@ -24,6 +36,21 @@ import java.util.Locale;
  */
 public class AucWebAutomator {
     private static final String TAG = "AucWeb";
+
+    /** Common JS helper to find all documents (including iframes) recursively. */
+    private static final String JS_GET_DOCS =
+            "function getDocs(){" +
+                    "  var ds=[document];" +
+                    "  function scan(w){" +
+                    "    try{" +
+                    "      for(var i=0; i<w.frames.length; i++){" +
+                    "        try{ ds.push(w.frames[i].document); scan(w.frames[i]); }catch(e){}" +
+                    "      }" +
+                    "    }catch(e){}" +
+                    "  }" +
+                    "  scan(window);" +
+                    "  return ds;" +
+                    "}";
 
     public interface Listener {
         void onStatus(String message);
@@ -63,11 +90,18 @@ public class AucWebAutomator {
     private int slotSelectAttempts;
     private long lastBookingStepMs;
 
+    private String overrideUseDate;
+    private String overridePreferredTimes;
+    private String overridePreferredCourts;
+
     /** Open-time: login/calendar before open, then strike. */
     private boolean warmMode;
     private boolean fastOpenPath;
     private boolean strikeStarted;
     private boolean waitingForOpen;
+    private boolean targetWeekPrepared;
+    private boolean targetWeekPreparing;
+    private int targetWeekPrepareAttempts;
     private long openAtMillis;
     private final Runnable strikeRunnable = this::beginStrikeNow;
 
@@ -79,6 +113,12 @@ public class AucWebAutomator {
         configureWebView();
     }
 
+    public void setOverrides(String useDate, String times, String courts) {
+        this.overrideUseDate = useDate;
+        this.overridePreferredTimes = times;
+        this.overridePreferredCourts = courts;
+    }
+
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     private void configureWebView() {
         CookieManager.getInstance().setAcceptCookie(true);
@@ -88,9 +128,30 @@ public class AucWebAutomator {
         s.setDomStorageEnabled(true);
         s.setJavaScriptCanOpenWindowsAutomatically(true);
         s.setSupportMultipleWindows(false);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         s.setUserAgentString(
                 "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
                         + "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+            WebSettingsCompat.setSafeBrowsingEnabled(s, false);
+        }
+
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_CLIENT_BASIC_USAGE)) {
+            WebViewCompat.setWebViewRenderProcessClient(webView, new WebViewRenderProcessClient() {
+                @Override
+                public void onRenderProcessUnresponsive(@Nullable WebView view, @Nullable WebViewRenderProcess renderer) {
+                    // Heavy reservation/payment JavaScript can briefly block the renderer.
+                    // Terminating it here destroys the active WebView and makes Android show
+                    // a misleading "uninstall WebView updates" crash dialog.
+                    Log.w(TAG, "WebView renderer temporarily unresponsive; waiting for recovery");
+                }
+
+                @Override
+                public void onRenderProcessResponsive(@Nullable WebView view, @Nullable WebViewRenderProcess renderer) {
+                }
+            });
+        }
 
         webView.addJavascriptInterface(new Bridge(), "SelectTimeBridge");
         webView.setWebChromeClient(new WebChromeClient() {
@@ -156,15 +217,45 @@ public class AucWebAutomator {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                return PaymentAppCardAutomator.handleRequest(context, view, request);
-            }
-
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                String url = request.getUrl().toString();
                 if (PaymentAppCardAutomator.shouldHandle(url)) {
                     return PaymentAppCardAutomator.handleUrl(context, view, url);
                 }
                 return false;
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    String msg = "네트워크 에러: " + error.getDescription() + " (" + error.getErrorCode() + ")";
+                    Log.e(TAG, msg + " at " + request.getUrl());
+                    status(msg);
+                }
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+                if (request.isForMainFrame()) {
+                    String msg = "HTTP 에러: " + errorResponse.getStatusCode();
+                    Log.e(TAG, msg + " at " + request.getUrl());
+                    status(msg);
+                }
+            }
+
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                Log.e(TAG, "SSL 에러: " + error.toString());
+                // In production, you should be careful with proceed().
+                // But for login issues on some networks, this helps identify the cause.
+                handler.cancel();
+                status("SSL 보안 연결 에러 발생");
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                Log.e(TAG, "WebView 렌더러가 비정상 종료되었습니다: didCrash=" + detail.didCrash());
+                status("웹 엔진 오류로 재시작이 필요합니다");
+                return true; // Keep app alive
             }
 
             @Override
@@ -289,6 +380,9 @@ public class AucWebAutomator {
         loginTries = 0;
         pageReadyToken = 0;
         waitingForOpen = false;
+        targetWeekPrepared = false;
+        targetWeekPreparing = false;
+        targetWeekPrepareAttempts = 0;
 
         // Restore values changed by the temporary fast-discount migration.
         if (store.getBool("party_disc_fast_v1", false)
@@ -298,6 +392,7 @@ public class AucWebAutomator {
             store.putInt(SecureStore.KEY_DISCOUNT_MULTI_CHILD, 2);
             store.putBool("party_disc_rollback_v1", true);
         }
+
         if (warmMode) {
             status("오픈 사전준비 — 통합 로그인·달력");
             NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
@@ -354,7 +449,7 @@ public class AucWebAutomator {
                 status("날짜·시간 선택 화면");
             }
             if (shouldHoldForOpen()) {
-                armOpenWait();
+                prepareTargetWeek(view);
                 return;
             }
             trySelectDateAndSlot(view);
@@ -379,7 +474,7 @@ public class AucWebAutomator {
 
         if (loginSucceeded && navigatedToReservation) {
             if (shouldHoldForOpen()) {
-                armOpenWait();
+                prepareTargetWeek(view);
                 return;
             }
             trySelectDateAndSlot(view);
@@ -393,7 +488,71 @@ public class AucWebAutomator {
 
     private boolean shouldHoldForOpen() {
         return warmMode && !strikeStarted && openAtMillis > 0
-                && System.currentTimeMillis() < openAtMillis - 200L;
+                && System.currentTimeMillis() < openAtMillis;
+    }
+
+    /**
+     * During warm-up, move to the target week without touching a reservable slot.
+     * Week navigation is therefore removed from the time-critical post-open path.
+     */
+    private void prepareTargetWeek(WebView view) {
+        if (!shouldHoldForOpen()) {
+            trySelectDateAndSlot(view);
+            return;
+        }
+        if (targetWeekPrepared || targetWeekPrepareAttempts >= 4) {
+            armOpenWait();
+            return;
+        }
+        if (targetWeekPreparing) {
+            return;
+        }
+
+        String useDate = (overrideUseDate != null && !overrideUseDate.isEmpty())
+                ? overrideUseDate : store.get(SecureStore.KEY_USE_DATE, "").trim();
+        int day;
+        if (useDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            day = Integer.parseInt(useDate.substring(8, 10));
+        } else {
+            Calendar cal = Calendar.getInstance();
+            cal.add(Calendar.DAY_OF_MONTH, store.getInt(SecureStore.KEY_DAYS_AHEAD, 7));
+            day = cal.get(Calendar.DAY_OF_MONTH);
+        }
+
+        targetWeekPreparing = true;
+        targetWeekPrepareAttempts++;
+        String js = String.format(Locale.US, ""
+                        + "(function(day){"
+                        + "function vis(el){if(!el)return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}"
+                        + "function txt(el){return ((el&&(el.innerText||el.textContent))||'').replace(/\\s+/g,' ').trim();}"
+                        + "var d=String(day),cols=document.querySelectorAll('td,th,li,div');"
+                        + "for(var i=0;i<cols.length;i++){var el=cols[i];if(!vis(el))continue;var t=txt(el);"
+                        + " if(t.length<4||t.length>420||!(/\\d{1,2}:\\d{2}/.test(t)))continue;"
+                        + " var h=el.children&&el.children.length?txt(el.children[0]):'';"
+                        + " if(h===d||h.indexOf(d+'(')===0||t===d||t.indexOf(d+' ')===0||t.indexOf(d+'(')===0)return 'ready';}"
+                        + "var ns=document.querySelectorAll('a,button,span,i,em,img');"
+                        + "for(var n=0;n<ns.length;n++){if(!vis(ns[n]))continue;var tx=txt(ns[n]);"
+                        + " var cl=String(ns[n].className||'').toLowerCase();"
+                        + " var ar=(ns[n].getAttribute&&ns[n].getAttribute('aria-label'))||'';"
+                        + " var next=tx==='다음'||tx==='>'||tx==='›'||tx==='»'||tx.indexOf('다음주')>=0||cl.indexOf('next')>=0||ar.indexOf('다음')>=0;"
+                        + " if(!next||(tx.length>12&&cl.indexOf('next')<0))continue;"
+                        + " try{ns[n].click();return 'next';}catch(e){}}"
+                        + "return 'unresolved';})(%d);", day);
+        view.evaluateJavascript(js, value -> {
+            targetWeekPreparing = false;
+            String result = value == null ? "" : value;
+            if (result.contains("ready")) {
+                targetWeekPrepared = true;
+                status("목표 이용 주간 준비 완료 — 오픈 대기");
+                armOpenWait();
+            } else if (result.contains("next") && shouldHoldForOpen()) {
+                status("목표 이용 주간으로 미리 이동 중…");
+                handler.postDelayed(() -> prepareTargetWeek(webView), 450);
+            } else {
+                // Do not delay the strike if this calendar layout cannot be recognized.
+                armOpenWait();
+            }
+        });
     }
 
     private void armOpenWait() {
@@ -513,63 +672,62 @@ public class AucWebAutomator {
         }
         String probe = ""
                 + "(function(){"
-                + "function visible(el){"
-                + " if(!el) return false;"
-                + " var r=el.getBoundingClientRect();"
-                + " return r.width>0 && r.height>0;"
+                + "function vis(el){ if(!el) return false; var r=el.getBoundingClientRect(); return r.width>0 && r.height>0; }"
+                + "function norm(s){ return String(s||'').replace(/\\s+/g,'').trim(); }"
+                + "function docs(){ var ds=[document]; try{ for(var i=0; i<window.frames.length; i++){ try{ ds.push(window.frames[i].document); }catch(e){} } }catch(e){} return ds; }"
+                + "var ds=docs(); var pass=null; var shortcut=null; var gatewayHint=false;"
+                + "for(var d=0; d<ds.length; d++){"
+                + " var doc=ds[d];"
+                + " var plist=doc.querySelectorAll(\"input[type='password']\");"
+                + " for(var i=0; i<plist.length; i++){ if(vis(plist[i])){ pass=plist[i]; break; } }"
+                + " if(pass) break;"
                 + "}"
-                + "function isShortcutText(t){"
-                + " return t.indexOf('통합로그인바로가기')>=0"
-                + "  || (t.indexOf('통합로그인')>=0 && t.indexOf('바로가기')>=0);"
-                + "}"
-                + "var shortcut=null, href='';"
-                + "var nodes=document.querySelectorAll('a,button,input,span,div,p,strong');"
-                + "for(var j=0;j<nodes.length;j++){"
-                + " var el=nodes[j];"
-                + " var t=(el.innerText||el.value||'').replace(/\\s+/g,'').trim();"
-                + " if(!isShortcutText(t)) continue;"
-                + " var target=el;"
-                + " if(el.tagName!=='A' && el.tagName!=='BUTTON'){"
-                + "  var a=el.closest?el.closest('a,button'):null; if(a) target=a;"
+                + "if(!pass){"
+                + " for(var d2=0; d2<ds.length; d2++){"
+                + "  var nodes=ds[d2].querySelectorAll('a,button,span,div,strong');"
+                + "  for(var j=0; j<nodes.length; j++){"
+                + "   var t=norm(nodes[j].innerText||nodes[j].value);"
+                + "   if(t.indexOf('통합로그인바로가기')>=0 || (t.indexOf('통합로그인')>=0 && t.indexOf('바로가기')>=0)){"
+                + "    var target=nodes[j];"
+                + "    if(target.tagName!=='A' && target.tagName!=='BUTTON'){ var a=target.closest?target.closest('a,button'):null; if(a) target=a; }"
+                + "    if(vis(target)){ shortcut=true; gatewayHint=true; break; }"
+                + "   }"
+                + "  }"
+                + "  if(shortcut) break;"
                 + " }"
-                + " shortcut=target;"
-                + " href=(target.href||target.getAttribute('href')||'').trim();"
-                + " break;"
                 + "}"
-                + "var body=(document.body&&document.body.innerText||'');"
-                // Gateway = pink shortcut only (SSO page title "안양시 통합 로그인" is NOT gateway).
-                + "var gatewayHint=body.indexOf('통합 로그인 바로가기')>=0"
-                + " || body.indexOf('통합로그인바로가기')>=0;"
-                + "var pass=null;"
-                + "var plist=document.querySelectorAll(\"input[type='password']\");"
-                + "for(var i=0;i<plist.length;i++){ if(visible(plist[i])){ pass=plist[i]; break; } }"
                 + "return JSON.stringify({"
+                + " hasPass: !!pass,"
                 + " hasShortcut: !!shortcut,"
-                + " href: href,"
                 + " gatewayHint: gatewayHint,"
-                + " hasPass: !!pass"
+                + " url: window.location.href"
                 + "});"
                 + "})();";
 
         view.evaluateJavascript(probe, result -> {
             Log.d(TAG, "login probe=" + result);
             String raw = result == null ? "" : result;
-            boolean hasShortcut = raw.contains("\"hasShortcut\":true")
-                    || raw.contains("\\\"hasShortcut\\\":true");
-            boolean gatewayHint = raw.contains("\"gatewayHint\":true")
-                    || raw.contains("\\\"gatewayHint\\\":true");
-            boolean hasPass = raw.contains("\"hasPass\":true")
-                    || raw.contains("\\\"hasPass\\\":true");
+            boolean hasPass = raw.contains("\"hasPass\":true") || raw.contains("\\\"hasPass\\\":true");
+            boolean hasShortcut = raw.contains("\"hasShortcut\":true") || raw.contains("\\\"hasShortcut\\\":true");
+            boolean gatewayHint = raw.contains("\"gatewayHint\":true") || raw.contains("\\\"gatewayHint\\\":true");
 
-            // SSO form ready: fill immediately (do not treat page title as gateway).
-            if (hasPass && !hasShortcut) {
+            if (hasPass) {
                 tryLogin(view);
                 return;
             }
-            // AUC gateway: click pink 「통합 로그인 바로가기」 first.
             if (hasShortcut || gatewayHint) {
                 clickIntegratedLoginShortcut(view);
                 return;
+            }
+            // If stuck on AUC without pass/shortcut, force load login URL
+            if (raw.contains("auc.or.kr") && !raw.contains("reservation") && !raw.contains("Step")) {
+                long now = System.currentTimeMillis();
+                if (now - lastBookingStepMs > 4000) {
+                    lastBookingStepMs = now;
+                    view.loadUrl(SecureStore.LOGIN_URL);
+                    status("로그인 페이지로 강제 이동…");
+                    return;
+                }
             }
             status("통합 로그인 화면 대기 중…");
         });
@@ -577,7 +735,7 @@ public class AucWebAutomator {
 
     private void clickIntegratedLoginShortcut(WebView view) {
         long now = System.currentTimeMillis();
-        if (now - lastShortcutClickMs < 1500) {
+        if (now - lastShortcutClickMs < 2000) {
             return;
         }
         lastShortcutClickMs = now;
@@ -585,8 +743,8 @@ public class AucWebAutomator {
         String js = ""
                 + "(function(){"
                 + "function isShortcutText(t){"
-                + " return t.indexOf('통합로그인바로가기')>=0"
-                + "  || (t.indexOf('통합로그인')>=0 && t.indexOf('바로가기')>=0);"
+                + " var tn=t.replace(/\\s+/g,'');"
+                + " return tn.indexOf('통합로그인바로가기')>=0;"
                 + "}"
                 + "var nodes=document.querySelectorAll('a,button,input,span,div,p,strong,em');"
                 + "for(var j=0;j<nodes.length;j++){"
@@ -625,7 +783,7 @@ public class AucWebAutomator {
                     if (!loginSucceeded && !loginFailed) {
                         advanceLogin(webView);
                     }
-                }, 2800);
+                }, 3500);
             } else {
                 integratedLoginClicked = false;
                 status("통합 로그인 바로가기 버튼을 찾지 못함 — 재시도");
@@ -751,7 +909,7 @@ public class AucWebAutomator {
                 return;
             }
             status("아이디/비밀번호 입력됨 → 로그인 클릭");
-            handler.postDelayed(() -> clickLoginButton(view), fastOpenPath ? 350 : 600);
+            handler.postDelayed(() -> clickLoginButton(view), fastOpenPath ? 400 : 800);
         });
     }
 
@@ -826,7 +984,8 @@ public class AucWebAutomator {
         slotSelectAttempts++;
         status("날짜·시간 그리드에서 「가」 슬롯 클릭… (" + slotSelectAttempts + ")");
 
-        String useDate = store.get(SecureStore.KEY_USE_DATE, "").trim();
+        String useDate = (overrideUseDate != null && !overrideUseDate.isEmpty())
+                ? overrideUseDate : store.get(SecureStore.KEY_USE_DATE, "").trim();
         int day;
         if (useDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
             day = Integer.parseInt(useDate.substring(8, 10));
@@ -837,8 +996,10 @@ public class AucWebAutomator {
             day = cal.get(Calendar.DAY_OF_MONTH);
         }
 
-        String times = store.get(SecureStore.KEY_PREFERRED_TIMES, "09:00,09:00~10:30");
-        String courts = store.get(SecureStore.KEY_PREFERRED_COURTS, "");
+        String times = (overridePreferredTimes != null && !overridePreferredTimes.isEmpty())
+                ? overridePreferredTimes : store.get(SecureStore.KEY_PREFERRED_TIMES, "09:00,09:00~10:30");
+        String courts = (overridePreferredCourts != null && !overridePreferredCourts.isEmpty())
+                ? overridePreferredCourts : store.get(SecureStore.KEY_PREFERRED_COURTS, "");
         boolean autoCourt = store.getBool(SecureStore.KEY_AUTO_COURT, true);
         String[] preferred = times.split(",");
 
@@ -1505,7 +1666,8 @@ public class AucWebAutomator {
     }
     /** Check white/available court checkboxes: preferred first, else any available (max 2). */
     private void selectAvailableCourts(WebView view) {
-        String courts = store.get(SecureStore.KEY_PREFERRED_COURTS, "");
+        String courts = (overridePreferredCourts != null && !overridePreferredCourts.isEmpty())
+                ? overridePreferredCourts : store.get(SecureStore.KEY_PREFERRED_COURTS, "");
         boolean autoCourt = store.getBool(SecureStore.KEY_AUTO_COURT, true);
         String courtsJson = JSONObject.quote(courts);
 
@@ -1609,56 +1771,48 @@ public class AucWebAutomator {
             return;
         }
 
-        // Phases: 0 set party, 1 open modal, 2 set discounts, 3 click 적용, 4 next/save
-        String js = String.format(Locale.US, ""
+        String js = String.format(Locale.US, JS_GET_DOCS + ""
                         + "(function(partyTarget, seniorTarget, multiTarget, phase){"
                         + "function visible(el){ if(!el) return false; var r=el.getBoundingClientRect(); return r.width>0&&r.height>0; }"
                         + "function norm(s){ return String(s||'').replace(/\\s+/g,'').trim(); }"
                         + "function txt(el){ return norm(el&&(el.innerText||el.textContent||el.value)); }"
-                        + "function clickExact(want, allowBtnClass){"
-                        + " var sels='button,a,input[type=button],input[type=submit]';"
-                        + " if(allowBtnClass) sels+=',.btn,span,div,p,td,li';"
-                        + " var nodes=document.querySelectorAll(sels);"
-                        + " for(var i=0;i<nodes.length;i++){"
-                        + "  if(!visible(nodes[i])) continue;"
-                        + "  var t=txt(nodes[i]);"
-                        + "  if(t!==want) continue;"
-                        + "  if(allowBtnClass && nodes[i].tagName!=='BUTTON' && nodes[i].tagName!=='A' && nodes[i].tagName!=='INPUT'){"
-                        + "   var cls=((nodes[i].className||'')+'').toLowerCase();"
-                        + "   var role=nodes[i].getAttribute&&nodes[i].getAttribute('role');"
-                        + "   if(cls.indexOf('btn')<0 && role!=='button' && !nodes[i].onclick) continue;"
+                        + "var ds=getDocs();"
+                        + "function clickExact(want, allowBtnClass, root){"
+                        + " var targetText = norm(want);"
+                        + " for(var d=0; d<ds.length; d++){"
+                        + "  var base = (root && d===0) ? root : ds[d];"
+                        + "  var nodes=base.querySelectorAll('button,a,input[type=button],input[type=submit],span,div,p,li');"
+                        + "  for(var i=0; i<nodes.length; i++){"
+                        + "   if(!visible(nodes[i])) continue;"
+                        + "   var t=norm(txt(nodes[i]));"
+                        + "   if(t === targetText || (t.indexOf(targetText)>=0 && t.length < targetText.length + 5)){"
+                        + "    if(!allowBtnClass && nodes[i].tagName!=='BUTTON' && nodes[i].tagName!=='A' && nodes[i].tagName!=='INPUT') continue;"
+                        + "    try{ nodes[i].scrollIntoView({block:'center'}); nodes[i].click(); return true; }catch(e){}"
+                        + "   }"
                         + "  }"
-                        + "  try{ nodes[i].scrollIntoView({block:'center'}); nodes[i].click(); return true; }catch(e){}"
                         + " }"
                         + " return false;"
                         + "}"
-                        + "function findRow(keyword){"
-                        + " var nodes=document.querySelectorAll('tr,li,div,dl,section,table,ul');"
-                        + " var best=null, bestLen=1e9;"
-                        + " for(var i=0;i<nodes.length;i++){"
-                        + "  if(!visible(nodes[i])) continue;"
-                        + "  var t=txt(nodes[i]);"
-                        + "  if(t.indexOf(norm(keyword))<0) continue;"
-                        + "  if(t.length>=4 && t.length<bestLen && t.length<180){ best=nodes[i]; bestLen=t.length; }"
+                        + "function findRow(keyword, scope){"
+                        + " var targetKey = norm(keyword);"
+                        + " for(var d=0; d<ds.length; d++){"
+                        + "  var base = (scope && d===0) ? scope : ds[d];"
+                        + "  var nodes=base.querySelectorAll('tr,li,div,dl,section,table,ul');"
+                        + "  var best=null, bestLen=1e9;"
+                        + "  for(var i=0; i<nodes.length; i++){"
+                        + "   if(!visible(nodes[i])) continue;"
+                        + "   var t=norm(txt(nodes[i]));"
+                        + "   if(t.indexOf(targetKey)<0) continue;"
+                        + "   if(t.length>=targetKey.length && t.length<bestLen && t.length<180){ best=nodes[i]; bestLen=t.length; }"
+                        + "  }"
+                        + "  if(best) return best;"
                         + " }"
-                        + " return best;"
-                        + "}"
-                        + "function readNum(row){"
-                        + " if(!row) return -1;"
-                        + " var inp=row.querySelector('input[type=number],input[type=text],input:not([type=hidden])');"
-                        + " if(inp&&visible(inp)){ var v=parseInt(String(inp.value||'').replace(/\\D/g,''),10); if(!isNaN(v)) return v; }"
-                        + " var els=row.querySelectorAll('span,em,strong,b,td,div,p,label');"
-                        + " for(var i=0;i<els.length;i++){"
-                        + "  if(!visible(els[i])) continue;"
-                        + "  var t=txt(els[i]);"
-                        + "  if(/^\\d{1,2}$/.test(t)) return parseInt(t,10);"
-                        + " }"
-                        + " var all=txt(row).match(/\\d+/g); return all&&all.length?parseInt(all[all.length-1],10):-1;"
+                        + " return null;"
                         + "}"
                         + "function findPlusMinus(row){"
                         + " var plus=null, minus=null;"
                         + " var buttons=row.querySelectorAll('button,a,span,i,em,div,img,input');"
-                        + " for(var b=0;b<buttons.length;b++){"
+                        + " for(var b=0; b<buttons.length; b++){"
                         + "  if(!visible(buttons[b])) continue;"
                         + "  var bt=txt(buttons[b]);"
                         + "  var alt=norm(buttons[b].getAttribute&& (buttons[b].getAttribute('alt')||buttons[b].getAttribute('title')||''));"
@@ -1668,7 +1822,7 @@ public class AucWebAutomator {
                         + " }"
                         + " if(!plus||!minus){"
                         + "  var clickables=[];"
-                        + "  for(var c=0;c<buttons.length;c++){"
+                        + "  for(var c=0; c<buttons.length; c++){"
                         + "   if(!visible(buttons[c])) continue;"
                         + "   var t2=txt(buttons[c]);"
                         + "   if(t2.length<=2 || buttons[c].tagName==='BUTTON' || buttons[c].tagName==='A' || buttons[c].tagName==='IMG') clickables.push(buttons[c]);"
@@ -1677,8 +1831,39 @@ public class AucWebAutomator {
                         + " }"
                         + " return {plus:plus,minus:minus};"
                         + "}"
-                        + "function setRowCount(keyword, target){"
-                        + " var row=findRow(keyword); if(!row) return 'missing:'+keyword;"
+                        + "function readNum(row, pm){"
+                        + " if(!row) return -1;"
+                        + " var inp=row.querySelector('input[type=number],input[type=text],input:not([type=hidden])');"
+                        + " if(inp&&visible(inp)){ var v=parseInt(String(inp.value||'').replace(/\\D/g,''),10); if(!isNaN(v)) return v; }"
+                        + " var els=row.querySelectorAll('span,em,strong,b,td,div,p,label');"
+                        + " var candidates=[];"
+                        + " for(var i=0; i<els.length; i++){"
+                        + "  if(!visible(els[i])) continue;"
+                        + "  var t=txt(els[i]);"
+                        + "  if(t.indexOf('%%')>=0) continue;" 
+                        + "  var m=t.match(/\\d+/);"
+                        + "  if(m){ "
+                        + "   var val=parseInt(m[0],10); "
+                        + "   if(val>=0 && val<30){"
+                        + "    var rect=els[i].getBoundingClientRect();"
+                        + "    var score=0;"
+                        + "    if(pm && pm.plus && pm.minus){"
+                        + "     var pr=pm.plus.getBoundingClientRect(), mr=pm.minus.getBoundingClientRect();"
+                        + "     if(rect.left > mr.right - 10 && rect.right < pr.left + 10) score += 50;"
+                        + "    }"
+                        + "    if(t.match(/(\\d+)\\s*(명|인)/)) score += 30;"
+                        + "    candidates.push({v:val, s:score});"
+                        + "   }"
+                        + "  }"
+                        + " }"
+                        + " if(candidates.length){ candidates.sort(function(a,b){return b.s-a.s;}); return candidates[0].v; }"
+                        + " return -1;"
+                        + "}"
+                        + "function setRowCount(keyword, target, scope){"
+                        + " var row=findRow(keyword, scope); if(!row) return 'missing:'+keyword;"
+                        + " var pm=findPlusMinus(row);"
+                        + " var cur=readNum(row, pm);"
+                        + " if(cur===target) return 'ok:'+keyword+'='+cur;"
                         + " var inp=row.querySelector('input[type=number],input[type=text]');"
                         + " if(inp&&visible(inp)&&!inp.disabled){"
                         + "  try{"
@@ -1690,68 +1875,47 @@ public class AucWebAutomator {
                         + "  }catch(e){}"
                         + " }"
                         + " var pm=findPlusMinus(row);"
-                        + " for(var guard=0;guard<24;guard++){"
-                        + "  var cur=readNum(row);"
-                        + "  if(cur===target) return 'ok:'+keyword+'='+cur;"
-                        + "  if(cur<0) break;"
-                        + "  try{"
-                        + "   if(cur<target && pm.plus) pm.plus.click();"
-                        + "   else if(cur>target && pm.minus) pm.minus.click();"
-                        + "   else break;"
-                        + "  }catch(e){ break; }"
-                        + " }"
-                        + " return 'step:'+keyword+'='+readNum(row);"
+                        + " if(cur<target && pm.plus) { pm.plus.click(); return 'click-plus:'+keyword+'='+cur; } "
+                        + " else if(cur>target && pm.minus) { pm.minus.click(); return 'click-minus:'+keyword+'='+cur; } "
+                        + " return 'step-fail:'+keyword+'='+cur;"
                         + "}"
-                        + "var body=txt(document.body);"
-                        + "var hasModal=body.indexOf('경로우대')>=0 && (body.indexOf('다자녀')>=0||body.indexOf('국가유공')>=0);"
-                        + "var openBtnVisible=false;"
-                        + "var nodes=document.querySelectorAll('button,a,input,span,div');"
-                        + "for(var oi=0;oi<nodes.length;oi++){"
-                        + " if(visible(nodes[oi]) && txt(nodes[oi])==='감면대상적용'){ openBtnVisible=true; break; }"
+                        + "var modalDoc=null, modalEl=null;"
+                        + "for(var d=0; d<ds.length; d++){"
+                        + " var m=ds[d].querySelector('.modal, .layer_popup, .pop_wrap, #layer_popup, [role=dialog]');"
+                        + " if(m && visible(m)){ modalDoc=ds[d]; modalEl=m; break; }"
+                        + " var btxt=norm(ds[d].body.innerText);"
+                        + " if(btxt.indexOf('경로우대')>=0 && btxt.indexOf('적용')>=0 && btxt.indexOf('사용인원')<0){ modalDoc=ds[d]; modalEl=ds[d].body; break; }"
                         + "}"
+                        + "var hasModal = !!modalEl;"
                         + "if(phase<=0){"
                         + " var p=setRowCount('사용인원', partyTarget);"
-                        + " return JSON.stringify({phase:1,log:[p],hasModal:hasModal});"
+                        + " if(p.indexOf('ok')>=0 || p.indexOf('input')>=0){ return JSON.stringify({phase:1,log:[p],hasModal:hasModal}); }"
+                        + " return JSON.stringify({phase:0,log:[p],hasModal:hasModal});"
                         + "}"
-                        + "if(phase===1 || (phase<3 && !hasModal)){"
-                        + " var opened=clickExact('감면대상적용', true);"
-                        + " if(!opened){"
-                        + "  for(var j=0;j<nodes.length;j++){"
-                        + "   if(!visible(nodes[j])) continue;"
-                        + "   var tj=txt(nodes[j]);"
-                        + "   if(tj.indexOf('감면대상')>=0 && tj.indexOf('적용')>=0 && tj.indexOf('경로')<0){"
-                        + "    try{ nodes[j].scrollIntoView({block:'center'}); nodes[j].click(); opened=true; break; }catch(e){}"
-                        + "   }"
-                        + "  }"
-                        + " }"
+                        + "if(phase===1 || (!hasModal && phase<4)){"
+                        + " var opened=clickExact('감면대상적용', true) || clickExact('감면적용', true);"
                         + " return JSON.stringify({phase:2,log:['open:'+opened],opened:!!opened});"
                         + "}"
                         + "if(phase===2 || phase===3){"
                         + " if(!hasModal){ return JSON.stringify({phase:1,log:['modal-missing']}); }"
                         + " var logs=[];"
-                        + " logs.push(setRowCount('경로우대', seniorTarget));"
-                        + " var mk=body.indexOf('안양시다자녀')>=0?'안양시다자녀':'다자녀';"
-                        + " logs.push(setRowCount(mk, multiTarget));"
-                        + " if(phase===2){ return JSON.stringify({phase:3,log:logs,hasModal:true}); }"
-                        + " var applied=clickExact('적용', true);"
-                        + " if(!applied){"
-                        + "  for(var k=0;k<nodes.length;k++){"
-                        + "   if(!visible(nodes[k])) continue;"
-                        + "   if(txt(nodes[k])==='적용'){ try{nodes[k].click(); applied=true; break;}catch(e){} }"
-                        + "  }"
-                        + " }"
+                        + " var sRes=setRowCount('경로우대자', seniorTarget, modalEl);"
+                        + " var mRes=setRowCount('안양시다자녀', multiTarget, modalEl);"
+                        + " logs.push(sRes); logs.push(mRes);"
+                        + " var allOk = (sRes.indexOf('ok')>=0 && mRes.indexOf('ok')>=0);"
+                        + " if(!allOk){ return JSON.stringify({phase:3,log:logs,hasModal:true}); }"
+                        + " var applied=clickExact('적용', true, modalEl);"
                         + " return JSON.stringify({phase:4,log:logs.concat(['apply:'+applied]),applied:!!applied});"
                         + "}"
                         + "if(phase>=4){"
-                        + " var stillModal=body.indexOf('경로우대')>=0 && body.indexOf('국가유공')>=0;"
-                        + " if(stillModal){"
-                        + "  var re=clickExact('적용', true);"
+                        + " if(hasModal){"
+                        + "  var re=clickExact('적용', true, modalEl);"
                         + "  return JSON.stringify({phase:4,log:['reapply:'+re],done:false});"
                         + " }"
                         + " var nextLabels=['저장','다음','확인','예약하기','결제하기','신청'];"
                         + " var next='';"
                         + " for(var ni=0;ni<nextLabels.length;ni++){ if(clickExact(nextLabels[ni], false)){ next=nextLabels[ni]; break; } }"
-                        + " return JSON.stringify({phase:5,log:['next:'+(next||'none')],done:true,openBtn:openBtnVisible});"
+                        + " return JSON.stringify({phase:5,log:['next:'+(next||'none')],done:true});"
                         + "}"
                         + "return JSON.stringify({phase:phase,log:['noop']});"
                         + "})(%d, %d, %d, %d);",
