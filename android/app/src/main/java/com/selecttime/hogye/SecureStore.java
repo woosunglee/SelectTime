@@ -39,10 +39,9 @@ public final class SecureStore {
     public static final String KEY_PARTY_SIZE = "party_size";
     public static final String KEY_DISCOUNT_SENIOR = "discount_senior"; // 경로우대
     public static final String KEY_DISCOUNT_MULTI_CHILD = "discount_multi_child"; // 다자녀
-    public static final int DEFAULT_PARTY_SIZE = 4;
-    /** 0 = skip 감면 modal (faster). Set via store if discounts are needed. */
-    public static final int DEFAULT_DISCOUNT_SENIOR = 0;
-    public static final int DEFAULT_DISCOUNT_MULTI_CHILD = 0;
+    public static final int DEFAULT_PARTY_SIZE = 6;
+    public static final int DEFAULT_DISCOUNT_SENIOR = 2;
+    public static final int DEFAULT_DISCOUNT_MULTI_CHILD = 2;
 
     public static final String DEFAULT_URL =
             "https://www.auc.or.kr/reservation/program/facility/calendar1"

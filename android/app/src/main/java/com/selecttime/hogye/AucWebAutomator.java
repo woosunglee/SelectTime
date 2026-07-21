@@ -290,13 +290,14 @@ public class AucWebAutomator {
         pageReadyToken = 0;
         waitingForOpen = false;
 
-        // Old defaults (경로/다자녀=2) forced a slow modal; clear once unless user re-sets later.
-        if (!store.getBool("party_disc_fast_v1", false)) {
-            store.putInt(SecureStore.KEY_DISCOUNT_SENIOR, 0);
-            store.putInt(SecureStore.KEY_DISCOUNT_MULTI_CHILD, 0);
-            store.putBool("party_disc_fast_v1", true);
+        // Restore values changed by the temporary fast-discount migration.
+        if (store.getBool("party_disc_fast_v1", false)
+                && !store.getBool("party_disc_rollback_v1", false)) {
+            store.putInt(SecureStore.KEY_PARTY_SIZE, 6);
+            store.putInt(SecureStore.KEY_DISCOUNT_SENIOR, 2);
+            store.putInt(SecureStore.KEY_DISCOUNT_MULTI_CHILD, 2);
+            store.putBool("party_disc_rollback_v1", true);
         }
-
         if (warmMode) {
             status("오픈 사전준비 — 통합 로그인·달력");
             NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
@@ -1573,8 +1574,8 @@ public class AucWebAutomator {
             String raw = v == null ? "" : v;
             if (raw.contains("\"ok\":true") || raw.contains("\\\"ok\\\":true")) {
                 courtsDone = true;
-                status("코트 선택됨 — 인원/감면 단계");
-                handler.postDelayed(() -> advanceBookingSteps(webView), fastOpenPath ? 400 : 600);
+                status("코트 선택됨 — 인원/감면 단계 대기");
+                handler.postDelayed(() -> advanceBookingSteps(webView), 1800);
             } else {
                 status("선택 가능한 코트를 찾지 못함 — 재시도");
                 handler.postDelayed(() -> {
@@ -1582,15 +1583,12 @@ public class AucWebAutomator {
                         lastBookingStepMs = 0;
                         advanceBookingSteps(webView);
                     }
-                }, fastOpenPath ? 800 : 1200);
+                }, 2000);
             }
         });
     }
 
-    /**
-     * 사용인원 + (옵션) 감면. 감면이 0이면 모달을 건너뛰고 인원만 맞춘 뒤 바로 다음 단계.
-     * 대기를 짧게 두고, 한 JS 호출에서 가능한 한 많이 처리한다.
-     */
+    /** 사용인원 + 감면(경로우대/다자녀) 적용 후 다음 단계. */
     private void applyPartyAndDiscounts(WebView view) {
         if (partyDone || bookingFlowDone) {
             return;
@@ -1598,19 +1596,11 @@ public class AucWebAutomator {
         int party = store.getInt(SecureStore.KEY_PARTY_SIZE, SecureStore.DEFAULT_PARTY_SIZE);
         int senior = store.getInt(SecureStore.KEY_DISCOUNT_SENIOR, SecureStore.DEFAULT_DISCOUNT_SENIOR);
         int multi = store.getInt(SecureStore.KEY_DISCOUNT_MULTI_CHILD, SecureStore.DEFAULT_DISCOUNT_MULTI_CHILD);
-        if (party < 1) {
+        if (party < 2) {
             party = SecureStore.DEFAULT_PARTY_SIZE;
         }
-        if (senior < 0) {
-            senior = 0;
-        }
-        if (multi < 0) {
-            multi = 0;
-        }
-        final boolean needDiscount = senior > 0 || multi > 0;
-
         partyTries++;
-        if (partyTries > 8) {
+        if (partyTries > 25) {
             status("감면 단계 초과 — 약관/결제 단계로 진행");
             partyDone = true;
             partyTries = 0;
@@ -1619,9 +1609,9 @@ public class AucWebAutomator {
             return;
         }
 
-        // phase: 0 party(+skip path), 1 open modal, 2 set+apply, 3 finish
+        // Phases: 0 set party, 1 open modal, 2 set discounts, 3 click 적용, 4 next/save
         String js = String.format(Locale.US, ""
-                        + "(function(partyTarget, seniorTarget, multiTarget, phase, needDisc){"
+                        + "(function(partyTarget, seniorTarget, multiTarget, phase){"
                         + "function visible(el){ if(!el) return false; var r=el.getBoundingClientRect(); return r.width>0&&r.height>0; }"
                         + "function norm(s){ return String(s||'').replace(/\\s+/g,'').trim(); }"
                         + "function txt(el){ return norm(el&&(el.innerText||el.textContent||el.value)); }"
@@ -1700,7 +1690,7 @@ public class AucWebAutomator {
                         + "  }catch(e){}"
                         + " }"
                         + " var pm=findPlusMinus(row);"
-                        + " for(var guard=0;guard<16;guard++){"
+                        + " for(var guard=0;guard<24;guard++){"
                         + "  var cur=readNum(row);"
                         + "  if(cur===target) return 'ok:'+keyword+'='+cur;"
                         + "  if(cur<0) break;"
@@ -1712,79 +1702,62 @@ public class AucWebAutomator {
                         + " }"
                         + " return 'step:'+keyword+'='+readNum(row);"
                         + "}"
-                        + "function clickNextish(){"
-                        + " var nextLabels=['저장','다음','확인','예약하기','결제하기','신청'];"
-                        + " for(var ni=0;ni<nextLabels.length;ni++){ if(clickExact(nextLabels[ni], false)) return nextLabels[ni]; }"
-                        + " return '';"
-                        + "}"
                         + "var body=txt(document.body);"
                         + "var hasModal=body.indexOf('경로우대')>=0 && (body.indexOf('다자녀')>=0||body.indexOf('국가유공')>=0);"
-                        + "var logs=[];"
-                        // Fast path: set party only, skip discount modal entirely
-                        + "if(!needDisc){"
-                        + " logs.push(setRowCount('사용인원', partyTarget));"
-                        + " var n=clickNextish();"
-                        + " logs.push('next:'+(n||'none'));"
-                        + " return JSON.stringify({phase:5,log:logs,done:true,skipDisc:true});"
+                        + "var openBtnVisible=false;"
+                        + "var nodes=document.querySelectorAll('button,a,input,span,div');"
+                        + "for(var oi=0;oi<nodes.length;oi++){"
+                        + " if(visible(nodes[oi]) && txt(nodes[oi])==='감면대상적용'){ openBtnVisible=true; break; }"
                         + "}"
                         + "if(phase<=0){"
-                        + " logs.push(setRowCount('사용인원', partyTarget));"
-                        + " if(!hasModal){"
-                        + "  var opened=clickExact('감면대상적용', true);"
-                        + "  if(!opened){"
-                        + "   var nodes=document.querySelectorAll('button,a,input,span,div');"
-                        + "   for(var j=0;j<nodes.length;j++){"
-                        + "    if(!visible(nodes[j])) continue;"
-                        + "    var tj=txt(nodes[j]);"
-                        + "    if(tj.indexOf('감면대상')>=0 && tj.indexOf('적용')>=0 && tj.indexOf('경로')<0){"
-                        + "     try{ nodes[j].scrollIntoView({block:'center'}); nodes[j].click(); opened=true; break; }catch(e){}"
-                        + "    }"
+                        + " var p=setRowCount('사용인원', partyTarget);"
+                        + " return JSON.stringify({phase:1,log:[p],hasModal:hasModal});"
+                        + "}"
+                        + "if(phase===1 || (phase<3 && !hasModal)){"
+                        + " var opened=clickExact('감면대상적용', true);"
+                        + " if(!opened){"
+                        + "  for(var j=0;j<nodes.length;j++){"
+                        + "   if(!visible(nodes[j])) continue;"
+                        + "   var tj=txt(nodes[j]);"
+                        + "   if(tj.indexOf('감면대상')>=0 && tj.indexOf('적용')>=0 && tj.indexOf('경로')<0){"
+                        + "    try{ nodes[j].scrollIntoView({block:'center'}); nodes[j].click(); opened=true; break; }catch(e){}"
                         + "   }"
                         + "  }"
-                        + "  logs.push('open:'+opened);"
-                        + "  return JSON.stringify({phase:2,log:logs,opened:!!opened});"
                         + " }"
-                        + " return JSON.stringify({phase:2,log:logs,hasModal:true});"
-                        + "}"
-                        + "if(phase===1){"
-                        + " var opened2=clickExact('감면대상적용', true);"
-                        + " return JSON.stringify({phase:2,log:['open:'+opened2],opened:!!opened2});"
+                        + " return JSON.stringify({phase:2,log:['open:'+opened],opened:!!opened});"
                         + "}"
                         + "if(phase===2 || phase===3){"
-                        + " body=txt(document.body);"
-                        + " hasModal=body.indexOf('경로우대')>=0 && (body.indexOf('다자녀')>=0||body.indexOf('국가유공')>=0);"
                         + " if(!hasModal){ return JSON.stringify({phase:1,log:['modal-missing']}); }"
+                        + " var logs=[];"
                         + " logs.push(setRowCount('경로우대', seniorTarget));"
                         + " var mk=body.indexOf('안양시다자녀')>=0?'안양시다자녀':'다자녀';"
                         + " logs.push(setRowCount(mk, multiTarget));"
+                        + " if(phase===2){ return JSON.stringify({phase:3,log:logs,hasModal:true}); }"
                         + " var applied=clickExact('적용', true);"
                         + " if(!applied){"
-                        + "  var ns=document.querySelectorAll('button,a,span,div');"
-                        + "  for(var k=0;k<ns.length;k++){"
-                        + "   if(!visible(ns[k])) continue;"
-                        + "   if(txt(ns[k])==='적용'){ try{ns[k].click(); applied=true; break;}catch(e){} }"
+                        + "  for(var k=0;k<nodes.length;k++){"
+                        + "   if(!visible(nodes[k])) continue;"
+                        + "   if(txt(nodes[k])==='적용'){ try{nodes[k].click(); applied=true; break;}catch(e){} }"
                         + "  }"
                         + " }"
-                        + " logs.push('apply:'+applied);"
-                        + " return JSON.stringify({phase:4,log:logs,applied:!!applied});"
+                        + " return JSON.stringify({phase:4,log:logs.concat(['apply:'+applied]),applied:!!applied});"
                         + "}"
                         + "if(phase>=4){"
-                        + " body=txt(document.body);"
                         + " var stillModal=body.indexOf('경로우대')>=0 && body.indexOf('국가유공')>=0;"
                         + " if(stillModal){"
                         + "  var re=clickExact('적용', true);"
                         + "  return JSON.stringify({phase:4,log:['reapply:'+re],done:false});"
                         + " }"
-                        + " var next=clickNextish();"
-                        + " return JSON.stringify({phase:5,log:['next:'+(next||'none')],done:true});"
+                        + " var nextLabels=['저장','다음','확인','예약하기','결제하기','신청'];"
+                        + " var next='';"
+                        + " for(var ni=0;ni<nextLabels.length;ni++){ if(clickExact(nextLabels[ni], false)){ next=nextLabels[ni]; break; } }"
+                        + " return JSON.stringify({phase:5,log:['next:'+(next||'none')],done:true,openBtn:openBtnVisible});"
                         + "}"
                         + "return JSON.stringify({phase:phase,log:['noop']});"
-                        + "})(%d, %d, %d, %d, %s);",
-                party, senior, multi, partyPhase, needDiscount ? "true" : "false");
+                        + "})(%d, %d, %d, %d);",
+                party, senior, multi, partyPhase);
 
-        status(needDiscount
-                ? ("감면 적용 중… (단계 " + partyPhase + ")")
-                : "사용인원 설정 중…");
+        status("감면 적용 중… (단계 " + partyPhase + ")");
         view.evaluateJavascript(js, v -> {
             Log.d(TAG, "party/discount=" + v);
             String raw = v == null ? "" : v;
@@ -1803,18 +1776,16 @@ public class AucWebAutomator {
             if (raw.contains("\"done\":true") || raw.contains("\\\"done\\\":true")) {
                 partyDone = true;
                 courtsDone = true;
-                status(needDiscount ? "감면 적용 완료" : "사용인원 설정 완료");
+                status("경로우대·다자녀 감면 적용 완료");
                 handler.postDelayed(() -> {
                     lastBookingStepMs = 0;
                     advanceBookingSteps(webView);
-                }, fastOpenPath ? 300 : 450);
+                }, 1500);
                 return;
             }
 
-            long delay = fastOpenPath ? 250 : 400;
-            if (partyPhase >= 3) {
-                delay = fastOpenPath ? 350 : 500;
-            }
+            // Stay on this page until discounts are applied — do not call maybePay yet.
+            long delay = partyPhase <= 2 ? 1000 : 1200;
             handler.postDelayed(() -> {
                 if (!partyDone && !bookingFlowDone) {
                     lastBookingStepMs = 0;
