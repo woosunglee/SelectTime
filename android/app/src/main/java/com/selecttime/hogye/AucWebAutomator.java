@@ -5,7 +5,9 @@ import android.content.Context;
 import android.net.http.SslError;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.JsResult;
@@ -79,6 +81,9 @@ public class AucWebAutomator {
     private boolean confirmAccepted;
     private boolean courtsDone;
     private boolean partyDone;
+    private boolean partyApplying;
+    private boolean partyRetryScheduled;
+    private boolean partyFailed;
     private boolean reserveGateDone;
     private int partyPhase;
     private int partyTries;
@@ -369,6 +374,9 @@ public class AucWebAutomator {
         confirmAccepted = false;
         courtsDone = false;
         partyDone = false;
+        partyApplying = false;
+        partyRetryScheduled = false;
+        partyFailed = false;
         reserveGateDone = false;
         partyPhase = 0;
         partyTries = 0;
@@ -383,15 +391,6 @@ public class AucWebAutomator {
         targetWeekPrepared = false;
         targetWeekPreparing = false;
         targetWeekPrepareAttempts = 0;
-
-        // Restore values changed by the temporary fast-discount migration.
-        if (store.getBool("party_disc_fast_v1", false)
-                && !store.getBool("party_disc_rollback_v1", false)) {
-            store.putInt(SecureStore.KEY_PARTY_SIZE, 6);
-            store.putInt(SecureStore.KEY_DISCOUNT_SENIOR, 2);
-            store.putInt(SecureStore.KEY_DISCOUNT_MULTI_CHILD, 2);
-            store.putBool("party_disc_rollback_v1", true);
-        }
 
         if (warmMode) {
             status("오픈 사전준비 — 통합 로그인·달력");
@@ -500,7 +499,7 @@ public class AucWebAutomator {
             trySelectDateAndSlot(view);
             return;
         }
-        if (targetWeekPrepared || targetWeekPrepareAttempts >= 4) {
+        if (targetWeekPrepared || targetWeekPrepareAttempts >= 6) {
             armOpenWait();
             return;
         }
@@ -508,45 +507,70 @@ public class AucWebAutomator {
             return;
         }
 
-        String useDate = (overrideUseDate != null && !overrideUseDate.isEmpty())
-                ? overrideUseDate : store.get(SecureStore.KEY_USE_DATE, "").trim();
-        int day;
-        if (useDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
-            day = Integer.parseInt(useDate.substring(8, 10));
-        } else {
-            Calendar cal = Calendar.getInstance();
-            cal.add(Calendar.DAY_OF_MONTH, store.getInt(SecureStore.KEY_DAYS_AHEAD, 7));
-            day = cal.get(Calendar.DAY_OF_MONTH);
-        }
+        int[] ymd = resolveUseYearMonthDay();
+        int year = ymd[0];
+        int month = ymd[1];
+        int day = ymd[2];
 
         targetWeekPreparing = true;
         targetWeekPrepareAttempts++;
         String js = String.format(Locale.US, ""
-                        + "(function(day){"
+                        + "(function(year, month, day){"
                         + "function vis(el){if(!el)return false;var r=el.getBoundingClientRect();return r.width>0&&r.height>0;}"
                         + "function txt(el){return ((el&&(el.innerText||el.textContent))||'').replace(/\\s+/g,' ').trim();}"
+                        + "function shownMonth(){"
+                        // Prefer the calendar title near month nav (e.g. 2026.07), not random body text.
+                        + " var ns=document.querySelectorAll('strong,h1,h2,h3,span,div,p,th,td');"
+                        + " for(var i=0;i<ns.length;i++){if(!vis(ns[i]))continue;var t=txt(ns[i]);"
+                        + "  if(t.length>18)continue;"
+                        + "  var m=t.match(/^(20\\d{2})\\s*[.\\-/년]\\s*(\\d{1,2})\\s*월?$/);"
+                        + "  if(m) return {y:parseInt(m[1],10), m:parseInt(m[2],10)};}"
+                        + " var body=txt(document.body);"
+                        + " var bm=body.match(/(20\\d{2})\\s*[.\\-/년]\\s*(\\d{1,2})\\s*월?/);"
+                        + " if(bm) return {y:parseInt(bm[1],10), m:parseInt(bm[2],10)};"
+                        + " return null;"
+                        + "}"
+                        + "function clickMonthNav(dir){"
+                        + " var ns=document.querySelectorAll('a,button,span,i,em,img');"
+                        + " var exact=[], soft=[];"
+                        + " for(var n=0;n<ns.length;n++){if(!vis(ns[n]))continue;var tx=txt(ns[n]);"
+                        + "  var cl=String(ns[n].className||'').toLowerCase();"
+                        + "  var ar=(ns[n].getAttribute&&ns[n].getAttribute('aria-label'))||'';"
+                        + "  var nextExact=tx==='>'||tx==='›'||tx==='»';"
+                        + "  var prevExact=tx==='<'||tx==='‹'||tx==='«';"
+                        + "  var nextSoft=tx.indexOf('다음달')>=0||tx.indexOf('다음월')>=0||cl.indexOf('next')>=0||ar.indexOf('다음달')>=0;"
+                        + "  var prevSoft=tx.indexOf('이전달')>=0||tx.indexOf('이전월')>=0||cl.indexOf('prev')>=0||ar.indexOf('이전달')>=0;"
+                        + "  if(dir==='next'){if(nextExact)exact.push(ns[n]);else if(nextSoft)soft.push(ns[n]);}"
+                        + "  else{if(prevExact)exact.push(ns[n]);else if(prevSoft)soft.push(ns[n]);}"
+                        + " }"
+                        + " var pick=exact.concat(soft);"
+                        + " for(var p=0;p<pick.length;p++){try{pick[p].click();return true;}catch(e){}}"
+                        + " return false;"
+                        + "}"
+                        + "var shown=shownMonth();"
+                        + "if(!shown){if(clickMonthNav('next'))return 'month-nav:next-unknown';return 'unresolved:no-month';}"
+                        + "if(year>shown.y||(year===shown.y&&month>shown.m)){"
+                        + " if(clickMonthNav('next')) return 'month-nav:next'; return 'unresolved:need-next';"
+                        + "}"
+                        + "if(year<shown.y||(year===shown.y&&month<shown.m)){"
+                        + " if(clickMonthNav('prev')) return 'month-nav:prev'; return 'unresolved:need-prev';"
+                        + "}"
+                        // Month already matches — only then treat the day column as ready.
                         + "var d=String(day),cols=document.querySelectorAll('td,th,li,div');"
                         + "for(var i=0;i<cols.length;i++){var el=cols[i];if(!vis(el))continue;var t=txt(el);"
                         + " if(t.length<4||t.length>420||!(/\\d{1,2}:\\d{2}/.test(t)))continue;"
                         + " var h=el.children&&el.children.length?txt(el.children[0]):'';"
                         + " if(h===d||h.indexOf(d+'(')===0||t===d||t.indexOf(d+' ')===0||t.indexOf(d+'(')===0)return 'ready';}"
-                        + "var ns=document.querySelectorAll('a,button,span,i,em,img');"
-                        + "for(var n=0;n<ns.length;n++){if(!vis(ns[n]))continue;var tx=txt(ns[n]);"
-                        + " var cl=String(ns[n].className||'').toLowerCase();"
-                        + " var ar=(ns[n].getAttribute&&ns[n].getAttribute('aria-label'))||'';"
-                        + " var next=tx==='다음'||tx==='>'||tx==='›'||tx==='»'||tx.indexOf('다음주')>=0||cl.indexOf('next')>=0||ar.indexOf('다음')>=0;"
-                        + " if(!next||(tx.length>12&&cl.indexOf('next')<0))continue;"
-                        + " try{ns[n].click();return 'next';}catch(e){}}"
-                        + "return 'unresolved';})(%d);", day);
+                        + "return 'unresolved:no-day';})(%d, %d, %d);", year, month, day);
         view.evaluateJavascript(js, value -> {
             targetWeekPreparing = false;
             String result = value == null ? "" : value;
             if (result.contains("ready")) {
                 targetWeekPrepared = true;
-                status("목표 이용 주간 준비 완료 — 오픈 대기");
+                status("목표 이용 달력 준비 완료 — 오픈 대기");
                 armOpenWait();
-            } else if (result.contains("next") && shouldHoldForOpen()) {
-                status("목표 이용 주간으로 미리 이동 중…");
+            } else if (result.contains("month-nav") && shouldHoldForOpen()) {
+                status("이용일이 다른 달 — 「>」로 달력 이동 중…");
                 handler.postDelayed(() -> prepareTargetWeek(webView), 450);
             } else {
                 // Do not delay the strike if this calendar layout cannot be recognized.
@@ -984,17 +1008,10 @@ public class AucWebAutomator {
         slotSelectAttempts++;
         status("날짜·시간 그리드에서 「가」 슬롯 클릭… (" + slotSelectAttempts + ")");
 
-        String useDate = (overrideUseDate != null && !overrideUseDate.isEmpty())
-                ? overrideUseDate : store.get(SecureStore.KEY_USE_DATE, "").trim();
-        int day;
-        if (useDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
-            day = Integer.parseInt(useDate.substring(8, 10));
-        } else {
-            int daysAhead = store.getInt(SecureStore.KEY_DAYS_AHEAD, 7);
-            Calendar cal = Calendar.getInstance();
-            cal.add(Calendar.DAY_OF_MONTH, daysAhead);
-            day = cal.get(Calendar.DAY_OF_MONTH);
-        }
+        int[] ymd = resolveUseYearMonthDay();
+        int year = ymd[0];
+        int month = ymd[1];
+        int day = ymd[2];
 
         String times = (overridePreferredTimes != null && !overridePreferredTimes.isEmpty())
                 ? overridePreferredTimes : store.get(SecureStore.KEY_PREFERRED_TIMES, "09:00,09:00~10:30");
@@ -1021,9 +1038,9 @@ public class AucWebAutomator {
         timeArray.append(']');
         String courtsJson = JSONObject.quote(courts);
 
-        // Weekly grid: must find day column first — never click document.body (false positives).
+        // Monthly/weekly grid: match year-month first, then day column, then 「가」 slot.
         String js = String.format(Locale.US, ""
-                        + "(function(day, times, courtsCsv, autoAny){"
+                        + "(function(year, month, day, times, courtsCsv, autoAny){"
                         + "function visible(el){ if(!el) return false; var r=el.getBoundingClientRect(); return r.width>0&&r.height>0; }"
                         + "function txt(el){ return ((el&&(el.innerText||el.textContent))||'').replace(/\\s+/g,' ').trim(); }"
                         + "function clickEl(el){"
@@ -1044,26 +1061,51 @@ public class AucWebAutomator {
                         + " }"
                         + " return false;"
                         + "}"
-                        + "function clickWeekNav(dir){"
+                        + "function shownMonth(){"
+                        + " var ns=document.querySelectorAll('strong,h1,h2,h3,span,div,p,th,td');"
+                        + " for(var i=0;i<ns.length;i++){if(!visible(ns[i]))continue;var t=txt(ns[i]);"
+                        + "  if(t.length>18)continue;"
+                        + "  var m=t.match(/^(20\\d{2})\\s*[.\\-/년]\\s*(\\d{1,2})\\s*월?$/);"
+                        + "  if(m) return {y:parseInt(m[1],10), m:parseInt(m[2],10)};}"
+                        + " var body=txt(document.body);"
+                        + " var bm=body.match(/(20\\d{2})\\s*[.\\-/년]\\s*(\\d{1,2})\\s*월?/);"
+                        + " if(bm) return {y:parseInt(bm[1],10), m:parseInt(bm[2],10)};"
+                        + " return null;"
+                        + "}"
+                        + "function clickMonthNav(dir){"
                         + " var nodes=document.querySelectorAll('a,button,span,i,em,div,img');"
+                        + " var exact=[], soft=[];"
                         + " for(var i=0;i<nodes.length;i++){"
                         + "  if(!visible(nodes[i])) continue;"
                         + "  var t=txt(nodes[i]);"
                         + "  var cls=((nodes[i].className||'')+'').toLowerCase();"
                         + "  var aria=(nodes[i].getAttribute&& (nodes[i].getAttribute('aria-label')||''))||'';"
-                        + "  var hit=false;"
-                        + "  if(dir==='next'){"
-                        + "   hit=t==='다음'||t==='>'||t==='›'||t==='»'||t.indexOf('다음주')>=0"
-                        + "    || cls.indexOf('next')>=0 || aria.indexOf('다음')>=0;"
-                        + "  } else {"
-                        + "   hit=t==='이전'||t==='<'||t==='‹'||t==='«'||t.indexOf('이전주')>=0"
-                        + "    || cls.indexOf('prev')>=0 || aria.indexOf('이전')>=0;"
-                        + "  }"
-                        + "  if(!hit) continue;"
-                        + "  if(t.length>12 && cls.indexOf('next')<0 && cls.indexOf('prev')<0) continue;"
-                        + "  if(clickEl(nodes[i])) return true;"
+                        + "  var nextExact=t==='>'||t==='›'||t==='»';"
+                        + "  var prevExact=t==='<'||t==='‹'||t==='«';"
+                        + "  var nextSoft=t.indexOf('다음달')>=0||t.indexOf('다음월')>=0||cls.indexOf('next')>=0||aria.indexOf('다음달')>=0;"
+                        + "  var prevSoft=t.indexOf('이전달')>=0||t.indexOf('이전월')>=0||cls.indexOf('prev')>=0||aria.indexOf('이전달')>=0;"
+                        + "  if(dir==='next'){if(nextExact)exact.push(nodes[i]);else if(nextSoft)soft.push(nodes[i]);}"
+                        + "  else{if(prevExact)exact.push(nodes[i]);else if(prevSoft)soft.push(nodes[i]);}"
                         + " }"
+                        + " var pick=exact.concat(soft);"
+                        + " for(var p=0;p<pick.length;p++){if(clickEl(pick[p])) return true;}"
                         + " return false;"
+                        + "}"
+                        + "var shown=shownMonth();"
+                        + "if(!shown){"
+                        + " if(clickMonthNav('next')) return 'month-nav:next-unknown';"
+                        + " SelectTimeBridge.onSlotClicked('none');"
+                        + " return 'none;no-month';"
+                        + "}"
+                        + "if(year>shown.y||(year===shown.y&&month>shown.m)){"
+                        + " if(clickMonthNav('next')) return 'month-nav:next';"
+                        + " SelectTimeBridge.onSlotClicked('none');"
+                        + " return 'none;need-next-month';"
+                        + "}"
+                        + "if(year<shown.y||(year===shown.y&&month<shown.m)){"
+                        + " if(clickMonthNav('prev')) return 'month-nav:prev';"
+                        + " SelectTimeBridge.onSlotClicked('none');"
+                        + " return 'none;need-prev-month';"
                         + "}"
                         + "var d=String(day);"
                         + "var roots=[];"
@@ -1092,10 +1134,8 @@ public class AucWebAutomator {
                         + " }"
                         + " roots.sort(function(a,b){ return txt(a).length-txt(b).length; });"
                         + "}"
-                        // Target day not on this week → navigate, do NOT click random body slots.
+                        // Month already matches. Missing day means wait/retry — do not flip months.
                         + "if(!roots.length){"
-                        + " if(clickWeekNav('next')) return 'week-nav:next';"
-                        + " if(clickWeekNav('prev')) return 'week-nav:prev';"
                         + " SelectTimeBridge.onSlotClicked('none');"
                         + " return 'none;no-day-col';"
                         + "}"
@@ -1118,7 +1158,7 @@ public class AucWebAutomator {
                         + "  var timeLike=/\\d{1,2}:\\d{2}/.test(tx);"
                         + "  if(!wantHit && !(autoAny && timeLike && avail)) continue;"
                         + "  if(!timeLike) continue;"
-                        + "  if(!avail && wantHit) continue;" // prefer real 「가」 cells only
+                        + "  if(!avail && wantHit) continue;"
                         + "  var score=0;"
                         + "  if(wantHit) score+=30;"
                         + "  if(avail) score+=20;"
@@ -1134,10 +1174,10 @@ public class AucWebAutomator {
                         + "}"
                         + "SelectTimeBridge.onSlotClicked('none');"
                         + "return 'none;roots='+roots.length;"
-                        + "})(%d, %s, %s, %s);",
-                day, timeArray, courtsJson, autoCourt ? "true" : "false");
+                        + "})(%d, %d, %d, %s, %s, %s);",
+                year, month, day, timeArray, courtsJson, autoCourt ? "true" : "false");
 
-        // Delay so the weekly calendar DOM is fully painted.
+        // Delay so the calendar DOM is fully painted.
         handler.postDelayed(() -> {
             if (bookingFlowDone || slotClicked) {
                 slotSelectionStarted = false;
@@ -1146,10 +1186,10 @@ public class AucWebAutomator {
             view.evaluateJavascript(js, v -> {
                 Log.d(TAG, "slot=" + v);
                 String raw = v == null ? "" : v;
-                if (raw.contains("week-nav")) {
-                    status("이용일이 다른 주 — 달력 이동 후 재시도");
+                if (raw.contains("month-nav") || raw.contains("week-nav")) {
+                    status("이용일이 다른 달/주 — 달력 이동 후 재시도");
                     slotSelectionStarted = false;
-                    // Don't burn attempt count for week navigation.
+                    // Don't burn attempt count for calendar navigation.
                     if (slotSelectAttempts > 0) {
                         slotSelectAttempts--;
                     }
@@ -1163,6 +1203,25 @@ public class AucWebAutomator {
         }, slotSelectAttempts == 1
                 ? (fastOpenPath ? 250 : 1000)
                 : (fastOpenPath ? 120 : 700));
+    }
+
+    /** Resolve configured use-date into year/month/day (1-based month). */
+    private int[] resolveUseYearMonthDay() {
+        String useDate = (overrideUseDate != null && !overrideUseDate.isEmpty())
+                ? overrideUseDate : store.get(SecureStore.KEY_USE_DATE, "").trim();
+        Calendar cal = Calendar.getInstance();
+        if (useDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            cal.set(Calendar.YEAR, Integer.parseInt(useDate.substring(0, 4)));
+            cal.set(Calendar.MONTH, Integer.parseInt(useDate.substring(5, 7)) - 1);
+            cal.set(Calendar.DAY_OF_MONTH, Integer.parseInt(useDate.substring(8, 10)));
+        } else {
+            cal.add(Calendar.DAY_OF_MONTH, store.getInt(SecureStore.KEY_DAYS_AHEAD, 7));
+        }
+        return new int[]{
+                cal.get(Calendar.YEAR),
+                cal.get(Calendar.MONTH) + 1,
+                cal.get(Calendar.DAY_OF_MONTH)
+        };
     }
 
     /**
@@ -1752,7 +1811,8 @@ public class AucWebAutomator {
 
     /** 사용인원 + 감면(경로우대/다자녀) 적용 후 다음 단계. */
     private void applyPartyAndDiscounts(WebView view) {
-        if (partyDone || bookingFlowDone) {
+        if (partyDone || bookingFlowDone || partyFailed
+                || partyApplying || partyRetryScheduled) {
             return;
         }
         int party = store.getInt(SecureStore.KEY_PARTY_SIZE, SecureStore.DEFAULT_PARTY_SIZE);
@@ -1761,18 +1821,19 @@ public class AucWebAutomator {
         if (party < 2) {
             party = SecureStore.DEFAULT_PARTY_SIZE;
         }
+        senior = Math.max(0, senior);
+        multi = Math.max(0, multi);
         partyTries++;
-        if (partyTries > 30) {
-            status("감면 단계 초과 — 약관/결제 단계로 진행");
-            partyDone = true;
-            partyTries = 0;
-            lastBookingStepMs = 0;
-            advanceBookingSteps(view);
+        if (partyTries > 35) {
+            partyFailed = true;
+            status("감면 자동 설정 중단 — 수동으로 확인 후 적용해 주세요");
+            NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
+                    context.getString(R.string.app_name), "감면 설정 실패 — 수동 개입 필요");
             return;
         }
 
         String js = String.format(Locale.US, JS_GET_DOCS + ""
-                        + "(function(partyTarget, seniorTarget, multiTarget, phase){"
+                        + "(function(partyTarget, seniorTarget, multiTarget, phase, attempt){"
                         + "function visible(el){ if(!el) return false; var r=el.getBoundingClientRect(); return r.width>0&&r.height>0; }"
                         + "function norm(s){ return String(s||'').replace(/\\s+/g,'').trim(); }"
                         + "function txt(el){ return norm(el&&(el.innerText||el.textContent||el.value)); }"
@@ -1786,37 +1847,90 @@ public class AucWebAutomator {
                         + "  var opts={bubbles:true,cancelable:true,view:window,clientX:x,clientY:y};"
                         + "  el.dispatchEvent(new MouseEvent('mousedown',opts));"
                         + "  el.dispatchEvent(new MouseEvent('mouseup',opts));"
-                        + "  el.dispatchEvent(new MouseEvent('click',opts));"
                         + " }catch(e){}"
                         + " try{ el.click(); return true; }catch(e){ return false; }"
                         + "}"
                         + "function clickExact(want, allowBtnClass, root){"
                         + " var targetText = norm(want);"
-                        + " for(var d=0; d<ds.length; d++){"
-                        + "  var base = (root && d===0) ? root : ds[d];"
+                        + " var bases=root?[root]:ds;"
+                        + " function clickable(el){"
+                        + "  if(!el)return false;var tag=el.tagName,role=el.getAttribute&&el.getAttribute('role');"
+                        + "  var cls=String(el.className||'').toLowerCase();"
+                        + "  var cur='';try{cur=getComputedStyle(el).cursor;}catch(e){}"
+                        + "  return tag==='BUTTON'||tag==='A'||tag==='INPUT'||role==='button'||!!el.onclick"
+                        + "   ||cls.indexOf('btn')>=0||cur==='pointer';"
+                        + " }"
+                        + " for(var d=0; d<bases.length; d++){"
+                        + "  var base=bases[d];"
                         + "  var nodes=base.querySelectorAll('button,a,input[type=button],input[type=submit],span,div,p,li');"
                         + "  for(var i=0; i<nodes.length; i++){"
                         + "   if(!visible(nodes[i])) continue;"
                         + "   var t=norm(txt(nodes[i]));"
                         + "   if(t === targetText || (t.indexOf(targetText)>=0 && t.length < targetText.length + 5)){"
-                        + "    if(!allowBtnClass && nodes[i].tagName!=='BUTTON' && nodes[i].tagName!=='A' && nodes[i].tagName!=='INPUT') continue;"
-                        + "    if(tapEl(nodes[i])) return true;"
+                        + "    var clicker=nodes[i];"
+                        + "    if(allowBtnClass){"
+                        + "     for(var up=0;up<5&&clicker&&!clickable(clicker);up++){"
+                        + "      if(clicker===base){clicker=null;break;}clicker=clicker.parentElement;}"
+                        + "    }else if(!clickable(clicker)){continue;}"
+                        + "    if(clicker&&tapEl(clicker)) return true;"
                         + "   }"
                         + "  }"
                         + " }"
                         + " return false;"
                         + "}"
-                        + "function findRow(keyword, scope){"
-                        + " var targetKey = norm(keyword);"
-                        + " for(var d=0; d<ds.length; d++){"
-                        + "  var base = (scope && d===0) ? scope : ds[d];"
+                        + "function nativeApply(root){"
+                        + " if(!root)return false;"
+                        + " var ns=root.querySelectorAll('button,a,input[type=button],input[type=submit],[role=button],span');"
+                        + " for(var i=0;i<ns.length;i++){if(!visible(ns[i]))continue;"
+                        + "  if(norm(txt(ns[i]))!=='적용')continue;var el=ns[i];"
+                        + "  for(var up=0;up<4&&el;up++){var tag=el.tagName,role=el.getAttribute&&el.getAttribute('role');"
+                        + "   if(tag==='BUTTON'||tag==='A'||tag==='INPUT'||role==='button'||el.onclick)break;"
+                        + "   el=el.parentElement;}"
+                        + "  if(!el)continue;var r=el.getBoundingClientRect();"
+                        + "  var ox=0,oy=0,w=el.ownerDocument.defaultView;"
+                        + "  try{while(w&&w!==window&&w.frameElement){var fr=w.frameElement.getBoundingClientRect();"
+                        + "   ox+=fr.left;oy+=fr.top;w=w.parent;}}catch(e){}"
+                        + "  SelectTimeBridge.onDiscountApplyTap(ox+r.left+r.width/2,oy+r.top+r.height/2,window.innerWidth,window.innerHeight);"
+                        + "  return true;"
+                        + " }"
+                        + " return false;"
+                        + "}"
+                        + "function findDiscountOpenButton(){"
+                        + " for(var d=0;d<ds.length;d++){"
+                        + "  var ns=ds[d].querySelectorAll('button,a,input[type=button],input[type=submit],[role=button]');"
+                        + "  for(var i=0;i<ns.length;i++){if(!visible(ns[i]))continue;var t=norm(txt(ns[i]));"
+                        + "   if(t==='감면대상적용'||t==='감면적용')return ns[i];}"
+                        + " }"
+                        + " return null;"
+                        + "}"
+                        + "function findRow(keywords, scope){"
+                        + " var keys=Array.isArray(keywords)?keywords:[keywords];"
+                        + " var bases=scope?[scope]:ds;"
+                        + " for(var d=0; d<bases.length; d++){"
+                        + "  var base=bases[d];"
                         + "  var nodes=base.querySelectorAll('tr,li,div,dl,section,table,ul');"
                         + "  var best=null, bestLen=1e9;"
                         + "  for(var i=0; i<nodes.length; i++){"
                         + "   if(!visible(nodes[i])) continue;"
                         + "   var t=norm(txt(nodes[i]));"
-                        + "   if(t.indexOf(targetKey)<0) continue;"
-                        + "   if(t.length>=targetKey.length && t.length<bestLen && t.length<180){ best=nodes[i]; bestLen=t.length; }"
+                        + "   var hit=false,minKey=999;"
+                        + "   for(var k=0;k<keys.length;k++){var key=norm(keys[k]);"
+                        + "    if(t.indexOf(key)>=0){hit=true;minKey=Math.min(minKey,key.length);}}"
+                        + "   if(!hit) continue;"
+                        // A label-only div is shorter than its counter row and used to win here.
+                        // Require the actual 「- number +」 controls shown in the discount popup.
+                        + "   var controls=nodes[i].querySelectorAll('button,a,input,span,i,em,img,[role=button]');"
+                        + "   var hasPlus=false,hasMinus=false;"
+                        + "   for(var ci=0;ci<controls.length;ci++){if(!visible(controls[ci]))continue;"
+                        + "    var ct=norm(txt(controls[ci]));"
+                        + "    var ca=norm(controls[ci].getAttribute&&"
+                        + "     (controls[ci].getAttribute('aria-label')||controls[ci].getAttribute('title')||controls[ci].getAttribute('alt')||''));"
+                        + "    var cc=String(controls[ci].className||'').toLowerCase();"
+                        + "    if(ct==='+'||ct==='＋'||ca.indexOf('증가')>=0||cc.indexOf('plus')>=0)hasPlus=true;"
+                        + "    if(ct==='-'||ct==='－'||ct==='−'||ca.indexOf('감소')>=0||cc.indexOf('minus')>=0)hasMinus=true;"
+                        + "   }"
+                        + "   if(!hasPlus||!hasMinus)continue;"
+                        + "   if(t.length>=minKey && t.length<bestLen && t.length<180){best=nodes[i];bestLen=t.length;}"
                         + "  }"
                         + "  if(best) return best;"
                         + " }"
@@ -1829,18 +1943,20 @@ public class AucWebAutomator {
                         + "  if(!visible(buttons[b])) continue;"
                         + "  var bt=txt(buttons[b]);"
                         + "  var alt=norm(buttons[b].getAttribute&& (buttons[b].getAttribute('alt')||buttons[b].getAttribute('title')||''));"
+                        + "  var aria=norm(buttons[b].getAttribute&& (buttons[b].getAttribute('aria-label')||''));"
                         + "  var cls=((buttons[b].className||'')+'').toLowerCase();"
-                        + "  if(bt==='+'||bt==='＋'||alt.indexOf('+')>=0||cls.indexOf('plus')>=0||cls.indexOf('increase')>=0||cls.indexOf('up')>=0) plus=buttons[b];"
-                        + "  if(bt==='-'||bt==='－'||bt==='−'||alt.indexOf('-')>=0||cls.indexOf('minus')>=0||cls.indexOf('decrease')>=0||cls.indexOf('down')>=0) minus=buttons[b];"
+                        + "  if(bt==='+'||bt==='＋'||alt.indexOf('+')>=0||aria.indexOf('증가')>=0||cls.indexOf('plus')>=0||cls.indexOf('increase')>=0) plus=buttons[b];"
+                        + "  if(bt==='-'||bt==='－'||bt==='−'||alt.indexOf('-')>=0||aria.indexOf('감소')>=0||cls.indexOf('minus')>=0||cls.indexOf('decrease')>=0) minus=buttons[b];"
                         + " }"
                         + " if(!plus||!minus){"
                         + "  var clickables=[];"
                         + "  for(var c=0;c<buttons.length;c++){"
                         + "   if(!visible(buttons[c])) continue;"
-                        + "   var t2=txt(buttons[c]);"
-                        + "   if(t2.length<=2 || buttons[c].tagName==='BUTTON' || buttons[c].tagName==='A' || buttons[c].tagName==='IMG') clickables.push(buttons[c]);"
+                        + "   var tag=buttons[c].tagName,role=buttons[c].getAttribute&&buttons[c].getAttribute('role');"
+                        + "   if(tag==='BUTTON'||tag==='A'||tag==='IMG'||role==='button'||buttons[c].onclick) clickables.push(buttons[c]);"
                         + "  }"
-                        + "  if(clickables.length>=2){ if(!minus) minus=clickables[0]; if(!plus) plus=clickables[clickables.length-1]; }"
+                        + "  clickables.sort(function(a,b){return a.getBoundingClientRect().left-b.getBoundingClientRect().left;});"
+                        + "  if(clickables.length>=2){if(!minus)minus=clickables[0];if(!plus)plus=clickables[clickables.length-1];}"
                         + " }"
                         + " return {plus:plus,minus:minus};"
                         + "}"
@@ -1862,7 +1978,7 @@ public class AucWebAutomator {
                         + "    var score=0;"
                         + "    if(pm && pm.plus && pm.minus){"
                         + "     var pr=pm.plus.getBoundingClientRect(), mr=pm.minus.getBoundingClientRect();"
-                        + "     if(rect.left > mr.right - 10 && rect.right < pr.left + 10) score += 50;"
+                        + "     if(rect.left > mr.right - 15 && rect.right < pr.left + 15) score += 60;"
                         + "    }"
                         + "    if(t.match(/(\\d+)\\s*(명|인)/)) score += 30;"
                         + "    if(els[i].tagName==='INPUT') score += 10;"
@@ -1873,69 +1989,128 @@ public class AucWebAutomator {
                         + " if(candidates.length){ candidates.sort(function(a,b){return b.s-a.s;}); return candidates[0].v; }"
                         + " return -1;"
                         + "}"
-                        + "function setRowCount(keyword, target, scope){"
-                        + " var row=findRow(keyword, scope); if(!row) return 'missing:'+keyword;"
+                        + "function setRowCount(keywords, target, scope){"
+                        + " var label=Array.isArray(keywords)?keywords[0]:keywords;"
+                        + " var row=findRow(keywords, scope); if(!row) return 'missing:'+label;"
                         + " var pm=findPlusMinus(row);"
                         + " var cur=readNum(row, pm);"
-                        + " if(cur===target) return 'ok:'+keyword+'='+cur;"
+                        + " if(cur===target) return 'ok:'+label+'='+cur;"
+                        + " var last=row.getAttribute('data-selecttime-last');"
+                        + " var same=parseInt(row.getAttribute('data-selecttime-same')||'0',10);"
+                        + " same=(last===String(cur))?same+1:0;"
+                        + " row.setAttribute('data-selecttime-last',String(cur));"
+                        + " row.setAttribute('data-selecttime-same',String(same));"
+                        + " if(same<2&&cur>=0&&cur<target&&pm.plus){tapEl(pm.plus);return 'click-plus:'+label+'='+cur;}"
+                        + " if(same<2&&cur>=0&&cur>target&&pm.minus){tapEl(pm.minus);return 'click-minus:'+label+'='+cur;}"
                         + " var inp=row.querySelector('input[type=number],input[type=text]');"
                         + " if(inp&&visible(inp)&&!inp.disabled){"
                         + "  try{"
-                        + "   var desc=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');"
+                        + "   var win=inp.ownerDocument.defaultView||window;"
+                        + "   var desc=Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype,'value');"
+                        + "   try{inp.focus();}catch(ignore){}"
                         + "   if(desc&&desc.set) desc.set.call(inp,String(target)); else inp.value=String(target);"
-                        + "   inp.dispatchEvent(new Event('input',{bubbles:true}));"
-                        + "   inp.dispatchEvent(new Event('change',{bubbles:true}));"
-                        + "   return 'input:'+keyword+'='+inp.value;"
+                        + "   inp.dispatchEvent(new win.Event('input',{bubbles:true}));"
+                        + "   inp.dispatchEvent(new win.Event('change',{bubbles:true}));"
+                        + "   try{inp.blur();}catch(ignore){}"
+                        + "   return 'input:'+label+'='+inp.value;"
                         + "  }catch(e){}"
                         + " }"
-                        + " if(cur<target && pm.plus) { tapEl(pm.plus); return 'click-plus:'+keyword+'='+cur; } "
-                        + " else if(cur>target && pm.minus) { tapEl(pm.minus); return 'click-minus:'+keyword+'='+cur; } "
-                        + " return 'step-fail:'+keyword+'='+cur;"
+                        + " return 'step-fail:'+label+'='+cur;"
                         + "}"
                         + "var modalDoc=null, modalEl=null;"
                         + "for(var d=0; d<ds.length; d++){"
-                        + " var m=ds[d].querySelector('.modal, .layer_popup, .pop_wrap, #layer_popup, [role=dialog]');"
-                        + " if(m && visible(m)){ modalDoc=ds[d]; modalEl=m; break; }"
-                        + " var btxt=norm(ds[d].body.innerText);"
-                        + " if(btxt.indexOf('경로우대자')>=0 && btxt.indexOf('적용')>=0 && btxt.indexOf('사용인원')<0){ modalDoc=ds[d]; modalEl=ds[d].body; break; }"
+                        + " var ms=ds[d].querySelectorAll('.modal, .layer_popup, .pop_wrap, #layer_popup, [role=dialog]');"
+                        + " for(var mi=0;mi<ms.length;mi++){if(!visible(ms[mi]))continue;"
+                        + "  var mt=norm(ms[mi].innerText);"
+                        + "  if(mt.indexOf('경로우대')>=0&&mt.indexOf('다자녀')>=0&&mt.indexOf('적용')>=0"
+                        + "   &&mt.indexOf('감면대상적용')<0&&mt.indexOf('사용인원선택')<0){"
+                        + "   modalDoc=ds[d]; modalEl=ms[mi]; break;"
+                        + "  }"
+                        + " }"
+                        + " if(modalEl) break;"
+                        + " var blocks=ds[d].querySelectorAll('section,div,table,ul,form');"
+                        + " var best=null,bestLen=99999;"
+                        + " for(var bi=0;bi<blocks.length;bi++){if(!visible(blocks[bi]))continue;var bt=norm(blocks[bi].innerText);"
+                        + "  if(bt.indexOf('경로우대')>=0&&bt.indexOf('다자녀')>=0&&bt.indexOf('적용')>=0"
+                        + "   &&bt.indexOf('감면대상적용')<0&&bt.indexOf('사용인원선택')<0"
+                        + "   &&bt.length<bestLen&&bt.length<600){best=blocks[bi];bestLen=bt.length;}}"
+                        + " if(best){modalDoc=ds[d];modalEl=best;break;}"
                         + "}"
                         + "var hasModal = !!modalEl;"
+                        + "var discountOpenBtn=findDiscountOpenButton();"
                         + "if(phase<=0){"
-                        + " var p=setRowCount('사용인원', partyTarget);"
+                        + " var p=setRowCount(['사용인원','이용인원'], partyTarget);"
                         + " if(p.indexOf('ok')>=0 || p.indexOf('input')>=0){ return JSON.stringify({phase:1,log:[p],hasModal:hasModal}); }"
                         + " return JSON.stringify({phase:0,log:[p],hasModal:hasModal});"
                         + "}"
+                        + "if(phase===1&&hasModal){"
+                        + " return JSON.stringify({phase:2,log:['modal:already-open'],opened:true});"
+                        + "}"
+                        // Recover stale phase 2/3 when the main page button is still visible.
+                        // norm() removes the screenshot's space in 「감면대상 적용」.
+                        + "if(!hasModal&&discountOpenBtn&&phase>=1){"
+                        + " var opened=tapEl(discountOpenBtn);"
+                        + " return JSON.stringify({phase:2,log:['open-real:'+opened],opened:!!opened});"
+                        + "}"
                         + "if(phase===1 || (!hasModal && phase<4)){"
-                        + " var opened=clickExact('감면대상적용', true) || clickExact('감면적용', true);"
+                        + " var opened=clickExact('감면대상 적용', true) || clickExact('감면적용', true);"
                         + " return JSON.stringify({phase:2,log:['open:'+opened],opened:!!opened});"
+                        + "}"
+                        + "function hideModal(el){"
+                        + " if(!el)return false;"
+                        + " try{"
+                        + "  el.style.display='none';el.style.visibility='hidden';"
+                        + "  var p=el.parentElement;"
+                        + "  for(var up=0;up<4&&p;up++){"
+                        + "   var cls=String(p.className||'').toLowerCase();"
+                        + "   if(cls.indexOf('modal')>=0||cls.indexOf('popup')>=0||cls.indexOf('layer')>=0||cls.indexOf('dim')>=0||cls.indexOf('mask')>=0){"
+                        + "    p.style.display='none';p.style.visibility='hidden';}"
+                        + "   p=p.parentElement;"
+                        + "  }"
+                        + "  return true;"
+                        + " }catch(e){return false;}"
+                        + "}"
+                        + "function clickReserve(){"
+                        + " for(var d=0;d<ds.length;d++){"
+                        + "  var ns=ds[d].querySelectorAll('button,a,input[type=button],input[type=submit],[role=button]');"
+                        + "  for(var i=0;i<ns.length;i++){if(!visible(ns[i]))continue;"
+                        + "   if(norm(txt(ns[i]))==='예약하기'){return tapEl(ns[i]);}}"
+                        + " }"
+                        + " return clickExact('예약하기', true);"
                         + "}"
                         + "if(phase===2 || phase===3){"
                         + " if(!hasModal){ return JSON.stringify({phase:1,log:['modal-missing']}); }"
                         + " var logs=[];"
-                        + " var sRes=setRowCount('경로우대자', seniorTarget, modalEl);"
-                        + " var mRes=setRowCount('안양시다자녀', multiTarget, modalEl);"
+                        + " var sRes=setRowCount(['경로우대자','경로우대'], seniorTarget, modalEl);"
+                        + " var mRes=setRowCount(['안양시다자녀','안양시 다자녀','다자녀'], multiTarget, modalEl);"
                         + " logs.push(sRes); logs.push(mRes);"
                         + " var allOk = (sRes.indexOf('ok')>=0 && mRes.indexOf('ok')>=0);"
-                        + " if(!allOk){ return JSON.stringify({phase:3,log:logs,hasModal:true}); }"
-                        + " var applied=clickExact('적용', true, modalEl);"
-                        + " return JSON.stringify({phase:4,log:logs.concat(['apply:'+applied]),applied:!!applied});"
+                        + " if(!allOk&&attempt<8){return JSON.stringify({phase:3,log:logs,hasModal:true});}"
+                        // Do not click 「적용」 — it loops without closing. Counts are live; go to 「예약하기」.
+                        + " var closed=hideModal(modalEl);"
+                        + " var reserved=clickReserve();"
+                        + " return JSON.stringify({phase:5,log:logs.concat(['hide:'+closed,'reserve:'+reserved]),"
+                        + "  done:!!reserved,hasModal:false});"
                         + "}"
                         + "if(phase>=4){"
                         + " if(hasModal){"
-                        + "  var re=clickExact('적용', true, modalEl);"
-                        + "  return JSON.stringify({phase:4,log:['reapply:'+re],done:false});"
+                        + "  var closed=hideModal(modalEl);"
+                        + "  var reserved=clickReserve();"
+                        + "  return JSON.stringify({phase:5,log:['hide:'+closed,'reserve:'+reserved],done:!!reserved});"
                         + " }"
-                        + " var nextLabels=['저장','다음','확인','예약하기','결제하기','신청'];"
+                        + " var nextLabels=['예약하기','저장','다음','확인','결제하기','신청'];"
                         + " var next='';"
-                        + " for(var ni=0;ni<nextLabels.length;ni++){ if(clickExact(nextLabels[ni], false)){ next=nextLabels[ni]; break; } }"
-                        + " return JSON.stringify({phase:5,log:['next:'+(next||'none')],done:true});"
+                        + " for(var ni=0;ni<nextLabels.length;ni++){ if(clickExact(nextLabels[ni], true)){ next=nextLabels[ni]; break; } }"
+                        + " return JSON.stringify({phase:5,log:['next:'+(next||'none')],done:!!next});"
                         + "}"
                         + "return JSON.stringify({phase:phase,log:['noop']});"
-                        + "})(%d, %d, %d, %d);",
-                party, senior, multi, partyPhase);
+                        + "})(%d, %d, %d, %d, %d);",
+                party, senior, multi, partyPhase, partyTries);
 
-        status("감면 적용 중… (단계 " + partyPhase + ")");
+        status("감면 적용 중… 인원 " + party + "명 (경로 " + senior + "/다자녀 " + multi + ") 단계 " + partyPhase);
+        partyApplying = true;
         view.evaluateJavascript(js, v -> {
+            partyApplying = false;
             Log.d(TAG, "party/discount=" + v);
             String raw = v == null ? "" : v;
             if (raw.contains("\"phase\":1") || raw.contains("\\\"phase\\\":1")) {
@@ -1952,18 +2127,21 @@ public class AucWebAutomator {
 
             if (raw.contains("\"done\":true") || raw.contains("\\\"done\\\":true")) {
                 partyDone = true;
+                partyRetryScheduled = false;
                 courtsDone = true;
-                status("경로우대·다자녀 감면 적용 완료");
+                status("감면 인원 반영 후 「예약하기」 진행");
                 handler.postDelayed(() -> {
                     lastBookingStepMs = 0;
                     advanceBookingSteps(webView);
-                }, 1500);
+                }, 1200);
                 return;
             }
 
             // Stay on this page until discounts are applied — do not call maybePay yet.
             long delay = partyPhase <= 2 ? 1000 : 1200;
+            partyRetryScheduled = true;
             handler.postDelayed(() -> {
+                partyRetryScheduled = false;
                 if (!partyDone && !bookingFlowDone) {
                     lastBookingStepMs = 0;
                     applyPartyAndDiscounts(webView);
@@ -2070,6 +2248,32 @@ public class AucWebAutomator {
         }
     }
 
+    private void dispatchDiscountApplyTap(float pageX, float pageY,
+                                          float innerWidth, float innerHeight) {
+        if (webView.getWidth() <= 0 || webView.getHeight() <= 0
+                || innerWidth <= 0 || innerHeight <= 0) {
+            return;
+        }
+        // CSS viewport coordinates use one uniform device scale. Scaling Y by the
+        // WebView/innerHeight ratio points below the button on tall WebViews.
+        float viewportScale = webView.getWidth() / innerWidth;
+        float x = pageX * viewportScale;
+        float y = pageY * viewportScale;
+        x = Math.max(2f, Math.min(webView.getWidth() - 2f, x));
+        y = Math.max(2f, Math.min(webView.getHeight() - 2f, y));
+        long downAt = SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(
+                downAt, downAt, MotionEvent.ACTION_DOWN, x, y, 0);
+        MotionEvent up = MotionEvent.obtain(
+                downAt, downAt + 80L, MotionEvent.ACTION_UP, x, y, 0);
+        webView.dispatchTouchEvent(down);
+        webView.dispatchTouchEvent(up);
+        down.recycle();
+        up.recycle();
+        Log.i(TAG, "Native discount apply tap @"
+                + Math.round(x) + "," + Math.round(y));
+    }
+
     private class Bridge {
         @JavascriptInterface
         public void openUrl(String url) {
@@ -2099,6 +2303,14 @@ public class AucWebAutomator {
                 status("슬롯 클릭 시도: " + time + " — 확인 팝업 검증");
                 handler.postDelayed(() -> verifySlotConfirmDialog(time),
                         fastOpenPath ? 350 : 600);
+            });
+        }
+
+        @JavascriptInterface
+        public void onDiscountApplyTap(float x, float y, float width, float height) {
+            handler.post(() -> {
+                status("감면 인원 확인 — 「적용」 버튼 터치");
+                dispatchDiscountApplyTap(x, y, width, height);
             });
         }
     }
