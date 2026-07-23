@@ -56,7 +56,7 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
 
     private void startForMode() {
         if (MODE_WARM.equals(openMode)) {
-            automator.startWarm(openAtMs);
+            automator.ensureWarm(openAtMs);
         } else if (MODE_STRIKE.equals(openMode)) {
             chainNextOpenAfterStrike();
             automator.startStrike(openAtMs);
@@ -82,7 +82,8 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
             chainNextOpenAfterStrike();
             automator.beginStrikeNow();
         } else if (MODE_WARM.equals(openMode)) {
-            automator.startWarm(openAtMs);
+            // Prealert may already have started warm login — do not wipe progress.
+            automator.ensureWarm(openAtMs);
         }
     }
 
@@ -91,12 +92,11 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
         if (!MODE_WARM.equals(openMode) && !MODE_STRIKE.equals(openMode)) {
             return;
         }
-        String useDate = OpenScheduleHelper.prepareOpenRun(this);
-        SecureStore store = new SecureStore(this);
-        String saved = store.get(SecureStore.KEY_USE_DATE, useDate);
-        if (saved != null && !saved.isEmpty()) {
-            useDate = saved;
+        String prepared = OpenScheduleHelper.prepareOpenRun(this);
+        if (prepared != null && !prepared.isEmpty()) {
+            overrideUseDate = prepared;
         }
+        String useDate = overrideUseDate != null ? overrideUseDate : prepared;
 
         Intent fg = new Intent(this, BookingForegroundService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -132,10 +132,12 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
         boolean quick = intent.getBooleanExtra(EXTRA_QUICK_MODE, false);
         fromAlarm = intent.getBooleanExtra(EXTRA_FROM_ALARM, false)
                 || OpenAlarmScheduler.ACTION_WARM.equals(intent.getAction())
+                || OpenAlarmScheduler.ACTION_PREALERT.equals(intent.getAction())
                 || OpenAlarmScheduler.ACTION_OPEN.equals(intent.getAction());
         openMode = intent.getStringExtra(EXTRA_OPEN_MODE);
         if (openMode == null || openMode.isEmpty()) {
-            if (OpenAlarmScheduler.ACTION_WARM.equals(intent.getAction())) {
+            if (OpenAlarmScheduler.ACTION_WARM.equals(intent.getAction())
+                    || OpenAlarmScheduler.ACTION_PREALERT.equals(intent.getAction())) {
                 openMode = MODE_WARM;
             } else if (OpenAlarmScheduler.ACTION_OPEN.equals(intent.getAction())) {
                 openMode = MODE_STRIKE;
@@ -181,12 +183,43 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
 
     @Override
     public void onStatus(String message) {
+        onStatus(message, AucWebAutomator.TONE_NORMAL);
+    }
+
+    @Override
+    public void onStatus(String message, int tone) {
         statusView.setText(message);
+        switch (tone) {
+            case AucWebAutomator.TONE_WAIT:
+                // Last ~30s: amber/orange so "예약 대기" is unmistakable.
+                statusView.setTextColor(getColor(R.color.warn_hot));
+                statusView.setBackgroundColor(0x33FF8C42);
+                statusView.setTextSize(17f);
+                break;
+            case AucWebAutomator.TONE_STRIKE:
+                statusView.setTextColor(getColor(R.color.strike));
+                statusView.setBackgroundColor(0x33FF5A5A);
+                statusView.setTextSize(17f);
+                break;
+            case AucWebAutomator.TONE_WARN:
+                statusView.setTextColor(getColor(R.color.warn));
+                statusView.setBackgroundColor(0x33E8B84A);
+                statusView.setTextSize(15f);
+                break;
+            default:
+                statusView.setTextColor(getColor(R.color.accent));
+                statusView.setBackgroundColor(getColor(R.color.accent_soft));
+                statusView.setTextSize(15f);
+                break;
+        }
     }
 
     @Override
     public void onFinished(boolean success, String message) {
         statusView.setText(message);
+        statusView.setTextColor(getColor(success ? R.color.accent : R.color.strike));
+        statusView.setBackgroundColor(getColor(R.color.accent_soft));
+        statusView.setTextSize(15f);
     }
 
     private void clearNotifications() {

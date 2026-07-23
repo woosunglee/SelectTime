@@ -2,6 +2,9 @@ package com.selecttime.hogye;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.http.SslError;
 import android.os.Handler;
 import android.os.Looper;
@@ -57,8 +60,18 @@ public class AucWebAutomator {
     public interface Listener {
         void onStatus(String message);
 
+        /** tone: 0=normal, 1=wait(amber), 2=strike, 3=warn */
+        default void onStatus(String message, int tone) {
+            onStatus(message);
+        }
+
         void onFinished(boolean success, String message);
     }
+
+    public static final int TONE_NORMAL = 0;
+    public static final int TONE_WAIT = 1;
+    public static final int TONE_STRIKE = 2;
+    public static final int TONE_WARN = 3;
 
     private final Context context;
     private final SecureStore store;
@@ -94,6 +107,13 @@ public class AucWebAutomator {
     private int payConfirmTries;
     private int slotSelectAttempts;
     private long lastBookingStepMs;
+    private long loginPhaseStartedMs;
+    private long lastLoginKickMs;
+    private long lastNetworkReloadMs;
+    private long loginAttemptedAtMs;
+    private int networkReloadTries;
+    private int loginStuckReloads;
+    private boolean networkReloadPending;
 
     private String overrideUseDate;
     private String overridePreferredTimes;
@@ -107,6 +127,7 @@ public class AucWebAutomator {
     private boolean targetWeekPrepared;
     private boolean targetWeekPreparing;
     private int targetWeekPrepareAttempts;
+    private long targetWeekPreparingAtMs;
     private long openAtMillis;
     private final Runnable strikeRunnable = this::beginStrikeNow;
 
@@ -134,6 +155,10 @@ public class AucWebAutomator {
         s.setJavaScriptCanOpenWindowsAutomatically(true);
         s.setSupportMultipleWindows(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        // Avoid stale SSO/login HTML from flaky Wi‑Fi proxy caches.
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        s.setLoadsImagesAutomatically(true);
+        s.setBlockNetworkImage(false);
         s.setUserAgentString(
                 "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 "
                         + "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
@@ -230,30 +255,50 @@ public class AucWebAutomator {
             }
 
             @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    String msg = "네트워크 에러: " + error.getDescription() + " (" + error.getErrorCode() + ")";
-                    Log.e(TAG, msg + " at " + request.getUrl());
-                    status(msg);
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                networkReloadPending = false;
+                if (!loginSucceeded && !loginFailed && !bookingFlowDone) {
+                    status("페이지 로딩 중… (" + networkLabel() + ")");
                 }
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (!request.isForMainFrame()) {
+                    return;
+                }
+                String msg = "네트워크 에러: " + error.getDescription()
+                        + " (" + error.getErrorCode() + ") · " + networkLabel();
+                Log.e(TAG, msg + " at " + request.getUrl());
+                status(msg);
+                scheduleNetworkReload("main-frame error " + error.getErrorCode());
             }
 
             @Override
             public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
-                if (request.isForMainFrame()) {
-                    String msg = "HTTP 에러: " + errorResponse.getStatusCode();
-                    Log.e(TAG, msg + " at " + request.getUrl());
-                    status(msg);
+                if (!request.isForMainFrame()) {
+                    return;
                 }
+                int code = errorResponse.getStatusCode();
+                // Soft 4xx on assets can happen; only recover hard failures for login/nav.
+                if (code < 500 && code != 408 && code != 429) {
+                    Log.w(TAG, "HTTP " + code + " at " + request.getUrl());
+                    return;
+                }
+                String msg = "HTTP 에러: " + code + " · " + networkLabel();
+                Log.e(TAG, msg + " at " + request.getUrl());
+                status(msg);
+                scheduleNetworkReload("http " + code);
             }
 
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-                Log.e(TAG, "SSL 에러: " + error.toString());
-                // In production, you should be careful with proceed().
-                // But for login issues on some networks, this helps identify the cause.
+                Log.e(TAG, "SSL 에러: " + error + " net=" + networkLabel());
                 handler.cancel();
-                status("SSL 보안 연결 에러 발생");
+                // Common on captive Wi‑Fi portals; LTE usually works. Do not proceed() insecurely.
+                status("SSL 실패 (" + networkLabel() + ") — 캡티브 Wi‑Fi면 LTE로 전환 후 재시도");
+                scheduleNetworkReload("ssl");
             }
 
             @Override
@@ -281,12 +326,22 @@ public class AucWebAutomator {
     }
 
     private int pageDebounceMs() {
+        // Faster settle on warm path so login starts sooner on slow LTE/Wi‑Fi.
+        if (warmMode && !loginSucceeded) {
+            return 400;
+        }
         return fastOpenPath ? 350 : 700;
     }
 
     private int pollIntervalMs() {
         if (waitingForOpen) {
-            return 1000;
+            // Countdown UI needs ~1s ticks in the last 30s.
+            long left = openAtMillis - System.currentTimeMillis();
+            return left <= 30_000L ? 500 : 1000;
+        }
+        if (!loginSucceeded && !loginFailed) {
+            // Active login loop: do not wait for pageFinished callbacks.
+            return 700;
         }
         return fastOpenPath ? 1200 : 2000;
     }
@@ -309,6 +364,28 @@ public class AucWebAutomator {
         strikeStarted = false;
         waitingForOpen = false;
         startInternal();
+    }
+
+    /**
+     * Start warm login once. Later prealert/warm alarms only refresh openAt
+     * so an in-progress login/calendar wait is not wiped.
+     */
+    public void ensureWarm(long openAtMs) {
+        if (warmMode && !strikeStarted && !bookingFlowDone) {
+            if (openAtMs > 0) {
+                openAtMillis = openAtMs;
+            }
+            if (waitingForOpen) {
+                armOpenWait();
+            } else if (!loginSucceeded) {
+                status("오픈 사전준비 — 통합 로그인 계속");
+                advanceLogin(webView);
+            } else if (navigatedToReservation) {
+                prepareTargetWeek(webView);
+            }
+            return;
+        }
+        startWarm(openAtMs);
     }
 
     /**
@@ -347,7 +424,7 @@ public class AucWebAutomator {
         slotSelectAttempts = 0;
         confirmPollTries = 0;
         confirmAccepted = false;
-        status("오픈! 「가」 슬롯 클릭 시작");
+        status(TONE_STRIKE, "오픈! 「가」 슬롯 클릭 시작");
         NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
                 context.getString(R.string.app_name), "오픈 — 슬롯 선점 시도");
         if (!loginSucceeded || !navigatedToReservation) {
@@ -387,22 +464,34 @@ public class AucWebAutomator {
         pollCount = 0;
         loginTries = 0;
         pageReadyToken = 0;
+        loginPhaseStartedMs = System.currentTimeMillis();
+        lastLoginKickMs = 0;
+        lastNetworkReloadMs = 0;
+        loginAttemptedAtMs = 0;
+        networkReloadTries = 0;
+        loginStuckReloads = 0;
+        networkReloadPending = false;
         waitingForOpen = false;
         targetWeekPrepared = false;
         targetWeekPreparing = false;
         targetWeekPrepareAttempts = 0;
+        targetWeekPreparingAtMs = 0;
 
+        String net = networkLabel();
         if (warmMode) {
-            status("오픈 사전준비 — 통합 로그인·달력");
+            status("오픈 사전준비 — 통합 로그인·달력 (" + net + ")");
             NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
-                    context.getString(R.string.app_name), "오픈 사전준비(로그인·달력)");
+                    context.getString(R.string.app_name), "오픈 사전준비(로그인·달력) · " + net);
         } else {
-            status("안양시 통합 로그인으로 이동");
+            status("안양시 통합 로그인으로 이동 (" + net + ")");
             NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
-                    context.getString(R.string.app_name), "예약 자동화를 시작합니다");
+                    context.getString(R.string.app_name), "예약 자동화 시작 · " + net);
+        }
+        if (net.contains("없음") || net.contains("미확인")) {
+            status("네트워크 불안정 (" + net + ") — 연결되면 자동 재시도");
         }
         webView.loadUrl(SecureStore.LOGIN_URL);
-        handler.postDelayed(this::pollLoop, fastOpenPath ? 800 : 1200);
+        handler.postDelayed(this::pollLoop, fastOpenPath ? 800 : 1000);
     }
 
     private void pollLoop() {
@@ -416,13 +505,166 @@ public class AucWebAutomator {
             long left = openAtMillis - System.currentTimeMillis();
             if (left <= 0) {
                 beginStrikeNow();
-            } else if (left < 5000 || pollCount % 5 == 0) {
-                status(String.format(Locale.KOREAN,
+            } else if (left <= 30_000L) {
+                int sec = Math.max(1, (int) ((left + 999) / 1000));
+                status(TONE_WAIT, String.format(Locale.KOREAN, "예약 대기 중… %d초", sec));
+            } else if (pollCount % 5 == 0) {
+                status(TONE_NORMAL, String.format(Locale.KOREAN,
                         "오픈 대기 중… %d초 (달력 준비됨)", Math.max(0, (left + 999) / 1000)));
             }
+        } else if (warmMode && !strikeStarted && !loginFailed && openAtMillis > 0) {
+            // Still logging in near open — show urgency, keep active login kicks.
+            long left = openAtMillis - System.currentTimeMillis();
+            if (left > 0 && left <= 30_000L && !loginSucceeded) {
+                status(TONE_WARN, String.format(Locale.KOREAN,
+                        "오픈 %d초 — 로그인 진행 중…", Math.max(1, (left + 999) / 1000)));
+            }
         }
+        // Core principle: act on a timer — never depend only on pageFinished/JS callbacks.
+        kickLoginIfNeeded();
+        kickWarmPrepIfNeeded();
         inspectPage();
         handler.postDelayed(this::pollLoop, pollIntervalMs());
+    }
+
+    /**
+     * Active login driver: probe/click/fill on a timer even if onPageFinished or
+     * evaluateJavascript callbacks are late or missing (slow Wi‑Fi/LTE).
+     */
+    private void kickLoginIfNeeded() {
+        if (bookingFlowDone || loginSucceeded || loginFailed || waitingForOpen || strikeStarted) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        // If fill/click JS never returned, unblock and try again — do not wait forever.
+        if (loginAttempted && loginAttemptedAtMs > 0 && now - loginAttemptedAtMs > 3500L) {
+            Log.w(TAG, "loginAttempted timed out — clearing for active retry");
+            loginAttempted = false;
+            loginAttemptedAtMs = 0;
+        }
+        if (now - lastLoginKickMs >= 700L) {
+            lastLoginKickMs = now;
+            advanceLogin(webView);
+        }
+        long elapsed = now - loginPhaseStartedMs;
+        // Stuck >35s without login: reload login URL (common after Wi‑Fi blip).
+        if (elapsed > 35_000L && loginStuckReloads < 4
+                && now - lastNetworkReloadMs > 12_000L) {
+            loginStuckReloads++;
+            status(TONE_WARN, String.format(Locale.KOREAN,
+                    "로그인 지연 — 재로드 %d/4 (%s)", loginStuckReloads, networkLabel()));
+            reloadLoginPage("stuck");
+        }
+    }
+
+    /**
+     * After login: keep driving reservation navigation + calendar prep on a timer
+     * so warm wait ("예약 대기") is reached even if onPageFinished is late.
+     */
+    private void kickWarmPrepIfNeeded() {
+        if (bookingFlowDone || strikeStarted || waitingForOpen || !warmMode || loginFailed) {
+            return;
+        }
+        if (!loginSucceeded) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (!navigatedToReservation) {
+            goReservation();
+            return;
+        }
+        if (targetWeekPreparing && targetWeekPreparingAtMs > 0
+                && now - targetWeekPreparingAtMs > 4000L) {
+            Log.w(TAG, "targetWeekPreparing timed out — clearing for active retry");
+            targetWeekPreparing = false;
+            targetWeekPreparingAtMs = 0;
+        }
+        if (now - lastLoginKickMs < 900L) {
+            // Reuse throttle cadence with login kicks after success.
+            return;
+        }
+        lastLoginKickMs = now;
+        prepareTargetWeek(webView);
+    }
+
+    private void scheduleNetworkReload(String reason) {
+        if (bookingFlowDone || loginSucceeded) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (networkReloadPending || now - lastNetworkReloadMs < 2500L) {
+            return;
+        }
+        if (networkReloadTries >= 8) {
+            status("네트워크 재시도 한도 — " + networkLabel()
+                    + " (캡티브 Wi‑Fi면 LTE로 바꿔 다시 실행)");
+            return;
+        }
+        networkReloadPending = true;
+        networkReloadTries++;
+        lastNetworkReloadMs = now;
+        long delay = Math.min(8000L, 1200L + networkReloadTries * 700L);
+        status(String.format(Locale.KOREAN,
+                "네트워크 복구 재시도 %d/8 (%s)…", networkReloadTries, networkLabel()));
+        Log.w(TAG, "scheduleNetworkReload reason=" + reason + " try=" + networkReloadTries);
+        handler.postDelayed(() -> {
+            networkReloadPending = false;
+            if (bookingFlowDone || loginSucceeded || loginFailed) {
+                return;
+            }
+            reloadLoginPage(reason);
+        }, delay);
+    }
+
+    private void reloadLoginPage(String reason) {
+        loginAttempted = false;
+        loginAttemptedAtMs = 0;
+        integratedLoginClicked = false;
+        lastShortcutClickMs = 0;
+        // Network blips often burn submit tries before the form is ready.
+        if ("stuck".equals(reason) || reason.startsWith("http") || reason.startsWith("main")
+                || "ssl".equals(reason)) {
+            loginTries = Math.max(0, loginTries - 1);
+        }
+        lastNetworkReloadMs = System.currentTimeMillis();
+        Log.w(TAG, "reloadLoginPage reason=" + reason + " net=" + networkLabel());
+        webView.stopLoading();
+        webView.loadUrl(SecureStore.LOGIN_URL);
+    }
+
+    /** Human-readable active network for status (Wi‑Fi vs LTE / captive). */
+    private String networkLabel() {
+        try {
+            ConnectivityManager cm =
+                    (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) {
+                return "네트워크?";
+            }
+            Network active = cm.getActiveNetwork();
+            if (active == null) {
+                return "네트워크 없음";
+            }
+            NetworkCapabilities caps = cm.getNetworkCapabilities(active);
+            if (caps == null) {
+                return "네트워크?";
+            }
+            boolean wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+            boolean cell = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR);
+            boolean validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+            boolean internet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            String type = wifi ? "Wi‑Fi" : (cell ? "LTE/모바일" : "기타망");
+            if (!internet) {
+                return type + "(인터넷 불가)";
+            }
+            if (!validated) {
+                // Typical captive portal: Wi‑Fi connected but SSO/SSL fails.
+                return type + "(인터넷 미확인·캡티브?)";
+            }
+            return type;
+        } catch (Exception e) {
+            Log.w(TAG, "networkLabel failed", e);
+            return "네트워크?";
+        }
     }
 
     private void onPageReady(WebView view, String url) {
@@ -513,6 +755,7 @@ public class AucWebAutomator {
         int day = ymd[2];
 
         targetWeekPreparing = true;
+        targetWeekPreparingAtMs = System.currentTimeMillis();
         targetWeekPrepareAttempts++;
         String js = String.format(Locale.US, ""
                         + "(function(year, month, day){"
@@ -564,6 +807,7 @@ public class AucWebAutomator {
                         + "return 'unresolved:no-day';})(%d, %d, %d);", year, month, day);
         view.evaluateJavascript(js, value -> {
             targetWeekPreparing = false;
+            targetWeekPreparingAtMs = 0;
             String result = value == null ? "" : value;
             if (result.contains("ready")) {
                 targetWeekPrepared = true;
@@ -585,8 +829,13 @@ public class AucWebAutomator {
         }
         waitingForOpen = true;
         long wait = Math.max(0L, openAtMillis - System.currentTimeMillis());
-        status(String.format(Locale.KOREAN,
-                "사전준비 완료 — 오픈까지 %d초 대기", (wait + 999) / 1000));
+        if (wait <= 30_000L) {
+            status(TONE_WAIT, String.format(Locale.KOREAN,
+                    "예약 대기 중… %d초", Math.max(1, (wait + 999) / 1000)));
+        } else {
+            status(TONE_NORMAL, String.format(Locale.KOREAN,
+                    "사전준비 완료 — 오픈까지 %d초 대기", (wait + 999) / 1000));
+        }
         NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
                 context.getString(R.string.app_name),
                 "달력 준비됨 — 오픈 시각까지 대기");
@@ -759,11 +1008,12 @@ public class AucWebAutomator {
 
     private void clickIntegratedLoginShortcut(WebView view) {
         long now = System.currentTimeMillis();
-        if (now - lastShortcutClickMs < 2000) {
+        long throttle = warmMode ? 1400L : 2000L;
+        if (now - lastShortcutClickMs < throttle) {
             return;
         }
         lastShortcutClickMs = now;
-        status("「통합 로그인 바로가기」 클릭");
+        status("「통합 로그인 바로가기」 클릭 (" + networkLabel() + ")");
         String js = ""
                 + "(function(){"
                 + "function isShortcutText(t){"
@@ -800,14 +1050,15 @@ public class AucWebAutomator {
         view.evaluateJavascript(js, v -> {
             Log.d(TAG, "integrated shortcut=" + v);
             String raw = v == null ? "" : v;
+            long followUp = warmMode ? 2200L : 3500L;
             if (raw.contains("nav") || raw.contains("loc") || raw.contains("clicked")) {
                 integratedLoginClicked = true;
-                status("통합 로그인 폼으로 이동 중…");
+                status("통합 로그인 폼으로 이동 중… (" + networkLabel() + ")");
                 handler.postDelayed(() -> {
                     if (!loginSucceeded && !loginFailed) {
                         advanceLogin(webView);
                     }
-                }, 3500);
+                }, followUp);
             } else {
                 integratedLoginClicked = false;
                 status("통합 로그인 바로가기 버튼을 찾지 못함 — 재시도");
@@ -815,7 +1066,7 @@ public class AucWebAutomator {
                     if (!loginSucceeded && !loginFailed) {
                         advanceLogin(webView);
                     }
-                }, 2000);
+                }, 1500);
             }
         });
     }
@@ -833,13 +1084,14 @@ public class AucWebAutomator {
         if (loginAttempted) {
             return;
         }
-        if (loginTries >= 3) {
-            status("로그인 재시도 한도 초과 — 아이디/비밀번호를 확인하세요");
+        if (loginTries >= 5) {
+            status("로그인 재시도 한도 초과 — 아이디/비밀번호·네트워크(" + networkLabel() + ") 확인");
             return;
         }
         loginAttempted = true;
+        loginAttemptedAtMs = System.currentTimeMillis();
         loginTries++;
-        status("아이디/비밀번호 입력 후 로그인… (" + loginTries + "/3)");
+        status("아이디/비밀번호 입력 후 로그인… (" + loginTries + "/5 · " + networkLabel() + ")");
 
         String idJson = JSONObject.quote(id);
         String pwJson = JSONObject.quote(pw);
@@ -974,11 +1226,11 @@ public class AucWebAutomator {
             status("로그인 버튼: " + String.valueOf(v));
             // Re-arm quickly if still on login (SSO often needs a second pass).
             handler.postDelayed(() -> {
-                if (!loginSucceeded && !loginFailed && loginTries < 3) {
+                if (!loginSucceeded && !loginFailed && loginTries < 5) {
                     loginAttempted = false;
                     advanceLogin(webView);
                 }
-            }, 2500);
+            }, warmMode ? 1800 : 2500);
         });
     }
 
@@ -2231,9 +2483,13 @@ public class AucWebAutomator {
     }
 
     private void status(String msg) {
+        status(TONE_NORMAL, msg);
+    }
+
+    private void status(int tone, String msg) {
         Log.i(TAG, msg);
         if (listener != null) {
-            handler.post(() -> listener.onStatus(msg));
+            handler.post(() -> listener.onStatus(msg, tone));
         }
     }
 

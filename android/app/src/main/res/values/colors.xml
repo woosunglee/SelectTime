@@ -9,6 +9,8 @@
     <color name="accent">#2EC4A6</color>
     <color name="accent_soft">#1A3D38</color>
     <color name="warn">#E8B84A</color>
+    <color name="warn_hot">#FF8C42</color>
+    <color name="strike">#FF5A5A</color>
     <color name="primary">#2EC4A6</color>
     <color name="primary_dark">#0E1524</color>
     <color name="picker_bg">#FFFFFF</color>

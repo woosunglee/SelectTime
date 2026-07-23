@@ -98,13 +98,13 @@ public final class NotifyHelper {
         }
     }
 
-    /** ~4분 전: 소리·진동 알람 + 앱(메인) 자동 실행용 알림. */
+    /** ~4분 전: 소리·진동 알람 + 예약(로그인) 화면 자동 실행. */
     public static void notifyPreOpenAlarm(Context context, String useDate, long openAtMs) {
         ensureChannel(context);
-        Intent main = new Intent(context, MainActivity.class);
-        main.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        Intent booking = OpenAlarmScheduler.bookingIntent(context, true, openAtMs, useDate);
+        booking.setAction(OpenAlarmScheduler.ACTION_PREALERT);
         PendingIntent pi = PendingIntent.getActivity(
-                context, 8200, main,
+                context, 8200, booking,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         String when = new SimpleDateFormat("HH:mm", Locale.KOREAN).format(new Date(openAtMs));

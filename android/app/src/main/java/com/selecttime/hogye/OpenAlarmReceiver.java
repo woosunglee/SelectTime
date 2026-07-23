@@ -7,8 +7,8 @@ import android.os.Build;
 import android.util.Log;
 
 /**
- * Handles open pre-alert (sound alarm) and backup warm/strike launches.
- * Primary warm/strike usually arrives via AlarmClock → BookingActivity directly.
+ * Backup path for open alarms. Primary warm/strike/prealert usually arrives via
+ * AlarmClock → BookingActivity directly.
  */
 public class OpenAlarmReceiver extends BroadcastReceiver {
     private static final String TAG = "OpenAlarmRx";
@@ -44,22 +44,6 @@ public class OpenAlarmReceiver extends BroadcastReceiver {
             openAt = System.currentTimeMillis();
         }
 
-        if (prealert) {
-            Log.i(TAG, "PREALERT use=" + useDate + " openAt=" + openAt);
-            NotifyHelper.notifyPreOpenAlarm(app, useDate, openAt);
-            // Bring app to foreground on main screen so user notices
-            try {
-                Intent main = new Intent(app, MainActivity.class);
-                main.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                app.startActivity(main);
-            } catch (Exception e) {
-                Log.w(TAG, "prealert start MainActivity failed", e);
-            }
-            return;
-        }
-
-        // Backup path if Activity PendingIntent was not used / failed
         String prepared = OpenScheduleHelper.prepareOpenRun(app);
         if (prepared != null && !prepared.isEmpty()) {
             useDate = prepared;
@@ -72,12 +56,19 @@ public class OpenAlarmReceiver extends BroadcastReceiver {
             app.startService(fg);
         }
 
-        Intent ui = OpenAlarmScheduler.bookingIntent(app, warm, openAt, useDate);
-        NotifyHelper.notifyOpenLaunch(app, ui, warm, useDate);
+        // PREALERT and WARM both open BookingActivity in warm mode so login starts.
+        boolean warmMode = prealert || warm;
+        Intent ui = OpenAlarmScheduler.bookingIntent(app, warmMode, openAt, useDate);
+        ui.setAction(action);
+
+        if (prealert) {
+            NotifyHelper.notifyPreOpenAlarm(app, useDate, openAt);
+        }
+        NotifyHelper.notifyOpenLaunch(app, ui, warmMode, useDate);
 
         try {
             app.startActivity(ui);
-            Log.i(TAG, (warm ? "WARM" : "OPEN") + " startActivity ok use=" + useDate);
+            Log.i(TAG, action + " startActivity BookingActivity ok use=" + useDate);
         } catch (Exception e) {
             Log.e(TAG, "startActivity failed — rely on full-screen notification", e);
         }

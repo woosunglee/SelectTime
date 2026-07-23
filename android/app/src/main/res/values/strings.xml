@@ -32,11 +32,11 @@
     <string name="schedule_missed">오픈 시각을 놓침 (알람 미실행)\n예정: %1$s\n이용일: %2$s\n앱을 열면 복구를 시도합니다.</string>
     <string name="schedule_not_running">오픈 시각 예약하기: 실행 중이 아님\n설정에서 이용 요일을 고른 뒤, 아래 버튼으로 다음 오픈(요일 7일 전 15:00)을 예약하세요.</string>
     <string name="schedule_armed_toast">대기 중 — %1$s에 자동 시작 (이용일 %2$s)</string>
-    <string name="schedule_armed_toast_warm">예약됨 — %1$s 오픈 (이용일 %2$s %3$s)\n설정 요일 %4$s\n· 4분 전: 알람 알림 + 앱 실행\n· %5$s: 사전 로그인 자동 시작 (2분 30초 전)\n· 정각: 예약 자동 실행\n상태바에 알람 시계가 보여야 정상입니다.</string>
+    <string name="schedule_armed_toast_warm">예약됨 — %1$s 오픈 (이용일 %2$s %3$s)\n설정 요일 %4$s\n· 4분 전: 알람 + 자동 로그인 시작\n· %5$s: 로그인·달력 재확인 (3분 전)\n· 30초 전: 예약 대기 표시\n· 정각: 예약 자동 실행\n상태바에 알람 시계가 보여야 정상입니다.</string>
     <string name="notif_alarm_channel">오픈 예약 알람</string>
     <string name="notif_alarm_channel_desc">오픈 전 알람·자동 실행 알림 (소리·진동)</string>
     <string name="notif_prealert_title">곧 오픈 예약</string>
-    <string name="notif_prealert_body">%1$s 오픈 예약이 곧 시작됩니다 (이용일 %2$s). 앱을 확인하세요.</string>
+    <string name="notif_prealert_body">%1$s 오픈 — 자동 로그인/달력 준비를 시작합니다 (이용일 %2$s).</string>
     <string name="notif_warm_alarm_title">오픈 사전준비 시작</string>
     <string name="notif_strike_alarm_title">오픈! 예약 자동 실행</string>
     <string name="schedule_stopped_toast">오픈 시각 예약을 중지했습니다</string>

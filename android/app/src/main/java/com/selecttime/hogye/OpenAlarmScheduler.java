@@ -10,9 +10,9 @@ import android.util.Log;
 /**
  * Open-time alarms (AlarmClock = exact + Doze-exempt + auto-start Activity):
  * <ul>
- *   <li>PREALERT (~4분 전): 소리/진동 알람 알림</li>
- *   <li>WARM (~3분 전): 앱 자동 실행 → 로그인·달력 준비</li>
- *   <li>STRIKE (정각): 앱 자동 실행 → 슬롯 클릭</li>
+ *   <li>PREALERT (~4분 전): 소리/진동 알람 + 로그인 화면 자동 실행</li>
+ *   <li>WARM (~3분 전): 로그인·달력 준비 재확인</li>
+ *   <li>STRIKE (정각): 슬롯 클릭</li>
  * </ul>
  */
 public final class OpenAlarmScheduler {
@@ -29,10 +29,10 @@ public final class OpenAlarmScheduler {
     public static final int REQ_SHOW_WARM = 7111;
     public static final int REQ_SHOW_OPEN = 7112;
 
-    /** Loud heads-up alarm before warm. */
+    /** Loud heads-up alarm + start warm login early. */
     public static final long PREALERT_LEAD_MS = 4 * 60 * 1000L;
-    /** Start login/calendar this many ms before open. */
-    public static final long WARM_LEAD_MS = 2 * 60 * 1000L + 30 * 1000L; // 2.5 mins
+    /** Ensure login/calendar is ready this many ms before open. */
+    public static final long WARM_LEAD_MS = 3 * 60 * 1000L;
 
     private OpenAlarmScheduler() {
     }
@@ -60,9 +60,11 @@ public final class OpenAlarmScheduler {
         long preAt = openAt - PREALERT_LEAD_MS;
         long warmAt = openAt - WARM_LEAD_MS;
 
-        if (preAt > now + 2000L && preAt < warmAt - 30_000L) {
+        // PREALERT also launches BookingActivity(warm) so login starts immediately
+        // when the user hears the alarm — not just MainActivity.
+        if (preAt > now + 2000L && preAt < warmAt - 15_000L) {
             setAlarmClock(app, preAt, REQ_PREALERT, REQ_SHOW_PREALERT,
-                    ACTION_PREALERT, openAt, next.useDate, false);
+                    ACTION_PREALERT, openAt, next.useDate, true);
         } else {
             cancelReq(app, REQ_PREALERT, ACTION_PREALERT);
         }
@@ -119,11 +121,20 @@ public final class OpenAlarmScheduler {
         PendingIntent op = launchBooking
                 ? pendingBookingActivity(context, reqCode, action, openAt, useDate)
                 : pendingBroadcast(context, reqCode, action, openAt, useDate);
+        // Status-bar alarm clock tap should open the same booking flow, not MainActivity.
+        Intent showIntent = launchBooking
+                ? bookingIntent(context,
+                ACTION_WARM.equals(action) || ACTION_PREALERT.equals(action),
+                openAt, useDate)
+                : new Intent(context, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        if (launchBooking) {
+            showIntent.setAction(action);
+        }
         PendingIntent show = PendingIntent.getActivity(
                 context,
                 showReq,
-                new Intent(context, MainActivity.class)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                showIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         try {
@@ -165,7 +176,7 @@ public final class OpenAlarmScheduler {
 
     private static PendingIntent pendingBookingActivity(Context context, int reqCode, String action,
                                                         long openAt, String useDate) {
-        boolean warm = ACTION_WARM.equals(action);
+        boolean warm = ACTION_WARM.equals(action) || ACTION_PREALERT.equals(action);
         Intent ui = bookingIntent(context, warm, openAt, useDate);
         // Distinct action so PendingIntents for warm vs strike do not collapse incorrectly
         ui.setAction(action);
