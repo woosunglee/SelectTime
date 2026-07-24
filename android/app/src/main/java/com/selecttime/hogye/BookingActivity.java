@@ -255,4 +255,19 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
             // nm.cancelAll();
         }
     }
+
+    @Override
+    protected void onDestroy() {
+        // Always stop — including config change — so the old WebView's timers die.
+        if (automator != null) {
+            automator.stop();
+            automator = null;
+        }
+        try {
+            stopService(new Intent(this, BookingForegroundService.class));
+        } catch (Exception ignored) {
+            // Service may already be gone.
+        }
+        super.onDestroy();
+    }
 }

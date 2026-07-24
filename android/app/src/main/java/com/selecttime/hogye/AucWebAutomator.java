@@ -2691,6 +2691,26 @@ public class AucWebAutomator {
         }
     }
 
+    /**
+     * Stop every pending Handler callback / poll / strike burst immediately.
+     * Call when BookingActivity is closing so automation cannot keep running
+     * against a destroyed WebView (leak + duplicate work).
+     */
+    public void stop() {
+        bookingFlowDone = true;
+        waitingForOpen = false;
+        strikeStarted = false;
+        warmMode = false;
+        pageReadyToken++;
+        handler.removeCallbacksAndMessages(null);
+        try {
+            webView.stopLoading();
+        } catch (Exception e) {
+            Log.w(TAG, "stopLoading failed", e);
+        }
+        Log.i(TAG, "automator stopped");
+    }
+
     private void dispatchDiscountApplyTap(float pageX, float pageY,
                                           float innerWidth, float innerHeight) {
         if (webView.getWidth() <= 0 || webView.getHeight() <= 0
