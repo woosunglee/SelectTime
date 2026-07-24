@@ -20,6 +20,8 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
     public static final String EXTRA_OPEN_MODE = "open_mode";
     public static final String EXTRA_OPEN_AT_MS = "open_at_ms";
     public static final String EXTRA_FROM_ALARM = "from_alarm";
+    /** True when launched from independent "오픈 예약 미리 테스트" (no production store writes). */
+    public static final String EXTRA_IS_TEST = "is_test_open";
 
     public static final String MODE_NORMAL = "normal";
     public static final String MODE_WARM = "warm";
@@ -30,6 +32,7 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
     private String openMode = MODE_NORMAL;
     private long openAtMs;
     private boolean fromAlarm;
+    private boolean isTestOpen;
 
     private String overrideUseDate;
     private String overridePreferredTimes;
@@ -92,7 +95,13 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
         if (!MODE_WARM.equals(openMode) && !MODE_STRIKE.equals(openMode)) {
             return;
         }
-        String prepared = OpenScheduleHelper.prepareOpenRun(this);
+        String prepared;
+        if (isTestOpen) {
+            // Do not write KEY_USE_DATE / schedule_next_* / open hour.
+            prepared = OpenScheduleHelper.prepareTestOpenRun(this, overrideUseDate);
+        } else {
+            prepared = OpenScheduleHelper.prepareOpenRun(this);
+        }
         if (prepared != null && !prepared.isEmpty()) {
             overrideUseDate = prepared;
         }
@@ -107,12 +116,17 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
 
         if (fromAlarm) {
             Intent self = OpenAlarmScheduler.bookingIntent(
-                    this, MODE_WARM.equals(openMode), openAtMs, useDate);
+                    this, MODE_WARM.equals(openMode), openAtMs, useDate, isTestOpen);
             NotifyHelper.notifyOpenLaunch(this, self, MODE_WARM.equals(openMode), useDate);
         }
     }
 
     private void chainNextOpenAfterStrike() {
+        if (isTestOpen) {
+            // Test is one-shot; leave production "오픈 예약" schedule as-is.
+            OpenAlarmScheduler.cancelTest(this);
+            return;
+        }
         SecureStore store = new SecureStore(this);
         if (!OpenScheduleHelper.isArmed(store)) {
             return;
@@ -130,6 +144,7 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
         }
         SecureStore store = new SecureStore(this);
         boolean quick = intent.getBooleanExtra(EXTRA_QUICK_MODE, false);
+        isTestOpen = intent.getBooleanExtra(EXTRA_IS_TEST, false);
         fromAlarm = intent.getBooleanExtra(EXTRA_FROM_ALARM, false)
                 || OpenAlarmScheduler.ACTION_WARM.equals(intent.getAction())
                 || OpenAlarmScheduler.ACTION_PREALERT.equals(intent.getAction())
@@ -156,27 +171,36 @@ public class BookingActivity extends AppCompatActivity implements AucWebAutomato
         if (intent.hasExtra(EXTRA_PREFERRED_COURTS)) {
             overridePreferredCourts = intent.getStringExtra(EXTRA_PREFERRED_COURTS);
         }
-        if (intent.hasExtra(EXTRA_AUTO_TO_PAYMENT)) {
-            store.putBool(SecureStore.KEY_AUTO_TO_PAYMENT,
-                    intent.getBooleanExtra(EXTRA_AUTO_TO_PAYMENT, true));
-        }
-        if (intent.hasExtra(EXTRA_AUTO_CLICK_PAY)) {
-            store.putBool(SecureStore.KEY_AUTO_CLICK_PAY,
-                    intent.getBooleanExtra(EXTRA_AUTO_CLICK_PAY, true));
+        // Production path may persist payment flags; test must not rewrite schedule settings.
+        if (!isTestOpen) {
+            if (intent.hasExtra(EXTRA_AUTO_TO_PAYMENT)) {
+                store.putBool(SecureStore.KEY_AUTO_TO_PAYMENT,
+                        intent.getBooleanExtra(EXTRA_AUTO_TO_PAYMENT, true));
+            }
+            if (intent.hasExtra(EXTRA_AUTO_CLICK_PAY)) {
+                store.putBool(SecureStore.KEY_AUTO_CLICK_PAY,
+                        intent.getBooleanExtra(EXTRA_AUTO_CLICK_PAY, true));
+            }
         }
 
         if (quick || MODE_WARM.equals(openMode) || MODE_STRIKE.equals(openMode)) {
-            store.putBool(SecureStore.KEY_AUTO_TO_PAYMENT, true);
-            store.putBool(SecureStore.KEY_AUTO_CLICK_PAY, true);
-            store.putBool(SecureStore.KEY_AUTO_COURT, true);
-            
+            if (!isTestOpen) {
+                store.putBool(SecureStore.KEY_AUTO_TO_PAYMENT, true);
+                store.putBool(SecureStore.KEY_AUTO_CLICK_PAY, true);
+                store.putBool(SecureStore.KEY_AUTO_COURT, true);
+            }
+
             String date = (overrideUseDate != null) ? overrideUseDate : store.get(SecureStore.KEY_USE_DATE, "");
             String time = (overridePreferredTimes != null) ? overridePreferredTimes : store.get(SecureStore.KEY_PREFERRED_TIMES, "");
-            
+
             if (MODE_WARM.equals(openMode)) {
-                statusView.setText(getString(R.string.warm_running, date));
+                statusView.setText(isTestOpen
+                        ? ("[테스트] " + getString(R.string.warm_running, date))
+                        : getString(R.string.warm_running, date));
             } else {
-                statusView.setText(getString(R.string.quick_book_running, date, time));
+                statusView.setText(isTestOpen
+                        ? ("[테스트] " + getString(R.string.quick_book_running, date, time))
+                        : getString(R.string.quick_book_running, date, time));
             }
         }
     }

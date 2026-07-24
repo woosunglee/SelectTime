@@ -82,4 +82,13 @@
         android:backgroundTint="@color/card"
         android:text="@string/schedule_open"
         android:textColor="@color/text" />
+
+    <Button
+        android:id="@+id/btnScheduleTest"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:backgroundTint="@color/accent_soft"
+        android:text="@string/schedule_test_open"
+        android:textColor="@color/warn" />
 </LinearLayout>

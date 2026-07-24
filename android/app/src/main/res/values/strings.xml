@@ -25,6 +25,13 @@
     <string name="quick_book_bad_time">호계 입장회차를 선택하세요.</string>
     <string name="quick_book_running">특정예약 %1$s %2$s — 로그인·결제 진행</string>
     <string name="schedule_open">오픈 시각에 예약하기</string>
+    <string name="schedule_test_open">오픈 예약 미리 테스트</string>
+    <string name="schedule_test_pick_date">테스트 오픈 날짜</string>
+    <string name="schedule_test_pick_time">테스트 오픈 시각 (아무 시간)</string>
+    <string name="schedule_test_confirm_title">오픈 예약 테스트 실행</string>
+    <string name="schedule_test_confirm_body">오픈 시각: %1$s\n이용일(테스트용 자동): %2$s (%3$s)\n\n· 4분 전: 알람 + 자동 로그인\n· 3분 전: 로그인·달력 재확인\n· 30초 전: 예약 대기\n· 정각: 슬롯 클릭 시작\n\n이 값은 「오픈 예약」설정의 요일·15:00·다음 일정에 반영되지 않습니다.</string>
+    <string name="schedule_test_armed_toast">테스트만 예약됨 — %1$s 오픈 (이용일 %2$s)\n기존 오픈 예약 설정/일정은 그대로입니다.</string>
+    <string name="schedule_test_past">선택한 시각이 이미 지났습니다. 미래 시각을 고르세요.</string>
     <string name="schedule_stop">오픈 예약 실행 중지</string>
     <string name="schedule_waiting">오픈 예약: 대기 중\n설정 요일: %1$s\n다음 오픈: %2$s\n이용일: %3$s (%4$s)</string>
     <string name="schedule_running">오픈 예약: 대기 중\n설정 요일: %1$s\n다음 오픈: %2$s\n이용일: %3$s (%4$s)</string>

@@ -29,6 +29,14 @@ public final class OpenAlarmScheduler {
     public static final int REQ_SHOW_WARM = 7111;
     public static final int REQ_SHOW_OPEN = 7112;
 
+    /** Separate request codes so test alarms never cancel/replace production. */
+    public static final int REQ_TEST_PREALERT = 7200;
+    public static final int REQ_TEST_WARM = 7201;
+    public static final int REQ_TEST_OPEN = 7202;
+    public static final int REQ_SHOW_TEST_PREALERT = 7210;
+    public static final int REQ_SHOW_TEST_WARM = 7211;
+    public static final int REQ_SHOW_TEST_OPEN = 7212;
+
     /** Loud heads-up alarm + start warm login early. */
     public static final long PREALERT_LEAD_MS = 4 * 60 * 1000L;
     /** Ensure login/calendar is ready this many ms before open. */
@@ -86,11 +94,61 @@ public final class OpenAlarmScheduler {
                 + " use=" + next.useDate + " exact=" + canExact(app));
     }
 
+    /**
+     * One-shot test open. Does not write production schedule_next / open-hour /
+     * weekday settings, and uses separate alarm request codes so production
+     * "오픈 예약" remains untouched.
+     */
+    public static void scheduleTest(Context context, OpenScheduleHelper.NextRun next) {
+        if (next == null) {
+            Log.w(TAG, "scheduleTest skipped — next is null");
+            return;
+        }
+        Context app = context.getApplicationContext();
+        SecureStore store = new SecureStore(app);
+        OpenScheduleHelper.saveTestNext(store, next);
+
+        long now = System.currentTimeMillis();
+        long openAt = next.openAtMillis;
+        long preAt = openAt - PREALERT_LEAD_MS;
+        long warmAt = openAt - WARM_LEAD_MS;
+
+        if (preAt > now + 2000L && preAt < warmAt - 15_000L) {
+            setAlarmClock(app, preAt, REQ_TEST_PREALERT, REQ_SHOW_TEST_PREALERT,
+                    ACTION_PREALERT, openAt, next.useDate, true, true);
+        } else {
+            cancelReq(app, REQ_TEST_PREALERT, ACTION_PREALERT, true);
+        }
+
+        if (warmAt < now + 1500L) {
+            warmAt = now + 1500L;
+        }
+        if (warmAt >= openAt - 500L) {
+            cancelReq(app, REQ_TEST_WARM, ACTION_WARM, true);
+        } else {
+            setAlarmClock(app, warmAt, REQ_TEST_WARM, REQ_SHOW_TEST_WARM,
+                    ACTION_WARM, openAt, next.useDate, true, true);
+        }
+        setAlarmClock(app, Math.max(now + 1000L, openAt), REQ_TEST_OPEN, REQ_SHOW_TEST_OPEN,
+                ACTION_OPEN, openAt, next.useDate, true, true);
+
+        Log.i(TAG, "scheduled TEST pre=" + preAt + " warm=" + warmAt + " open=" + openAt
+                + " use=" + next.useDate);
+    }
+
     public static void cancelAll(Context context) {
         Context app = context.getApplicationContext();
-        cancelReq(app, REQ_PREALERT, ACTION_PREALERT);
-        cancelReq(app, REQ_WARM, ACTION_WARM);
-        cancelReq(app, REQ_OPEN, ACTION_OPEN);
+        cancelReq(app, REQ_PREALERT, ACTION_PREALERT, false);
+        cancelReq(app, REQ_WARM, ACTION_WARM, false);
+        cancelReq(app, REQ_OPEN, ACTION_OPEN, false);
+    }
+
+    public static void cancelTest(Context context) {
+        Context app = context.getApplicationContext();
+        cancelReq(app, REQ_TEST_PREALERT, ACTION_PREALERT, true);
+        cancelReq(app, REQ_TEST_WARM, ACTION_WARM, true);
+        cancelReq(app, REQ_TEST_OPEN, ACTION_OPEN, true);
+        OpenScheduleHelper.clearTest(new SecureStore(app));
     }
 
     public static void rescheduleIfArmed(Context context) {
@@ -107,25 +165,31 @@ public final class OpenAlarmScheduler {
         }
     }
 
-    /**
-     * @param launchBooking if true, AlarmClock operation opens BookingActivity directly;
-     *                      if false, fires {@link OpenAlarmReceiver} for pre-alert only.
-     */
     private static void setAlarmClock(Context context, long triggerAt, int reqCode, int showReq,
                                       String action, long openAt, String useDate,
                                       boolean launchBooking) {
+        setAlarmClock(context, triggerAt, reqCode, showReq, action, openAt, useDate,
+                launchBooking, false);
+    }
+
+    /**
+     * Always fire {@link OpenAlarmReceiver} as the AlarmClock operation so we can
+     * start BookingActivity + FGS + full-screen notification. Direct Activity
+     * PendingIntents are skipped by some OEMs when the app is backgrounded.
+     * The status-bar clock "show" intent still opens BookingActivity on tap.
+     */
+    private static void setAlarmClock(Context context, long triggerAt, int reqCode, int showReq,
+                                      String action, long openAt, String useDate,
+                                      boolean launchBooking, boolean isTest) {
         AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (am == null) {
             return;
         }
-        PendingIntent op = launchBooking
-                ? pendingBookingActivity(context, reqCode, action, openAt, useDate)
-                : pendingBroadcast(context, reqCode, action, openAt, useDate);
-        // Status-bar alarm clock tap should open the same booking flow, not MainActivity.
+        PendingIntent op = pendingBroadcast(context, reqCode, action, openAt, useDate, isTest);
         Intent showIntent = launchBooking
                 ? bookingIntent(context,
                 ACTION_WARM.equals(action) || ACTION_PREALERT.equals(action),
-                openAt, useDate)
+                openAt, useDate, isTest)
                 : new Intent(context, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         if (launchBooking) {
@@ -140,7 +204,7 @@ public final class OpenAlarmScheduler {
         try {
             am.setAlarmClock(new AlarmManager.AlarmClockInfo(triggerAt, show), op);
             Log.i(TAG, "setAlarmClock action=" + action + " at=" + triggerAt
-                    + " launchBooking=" + launchBooking);
+                    + " via=BroadcastReceiver test=" + isTest);
         } catch (SecurityException e) {
             Log.e(TAG, "setAlarmClock denied — fallback", e);
             try {
@@ -152,20 +216,25 @@ public final class OpenAlarmScheduler {
     }
 
     private static void cancelReq(Context context, int reqCode, String action) {
+        cancelReq(context, reqCode, action, false);
+    }
+
+    private static void cancelReq(Context context, int reqCode, String action, boolean isTest) {
         AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (am == null) {
             return;
         }
-        am.cancel(pendingBroadcast(context, reqCode, action, 0, ""));
-        am.cancel(pendingBookingActivity(context, reqCode, action, 0, ""));
+        am.cancel(pendingBroadcast(context, reqCode, action, 0, "", isTest));
+        am.cancel(pendingBookingActivity(context, reqCode, action, 0, "", isTest));
     }
 
     private static PendingIntent pendingBroadcast(Context context, int reqCode, String action,
-                                                  long openAt, String useDate) {
+                                                  long openAt, String useDate, boolean isTest) {
         Intent i = new Intent(context, OpenAlarmReceiver.class);
         i.setAction(action);
         i.putExtra(BookingActivity.EXTRA_OPEN_AT_MS, openAt);
         i.putExtra(BookingActivity.EXTRA_USE_DATE, useDate == null ? "" : useDate);
+        i.putExtra(BookingActivity.EXTRA_IS_TEST, isTest);
         return PendingIntent.getBroadcast(
                 context,
                 reqCode,
@@ -175,10 +244,9 @@ public final class OpenAlarmScheduler {
     }
 
     private static PendingIntent pendingBookingActivity(Context context, int reqCode, String action,
-                                                        long openAt, String useDate) {
+                                                        long openAt, String useDate, boolean isTest) {
         boolean warm = ACTION_WARM.equals(action) || ACTION_PREALERT.equals(action);
-        Intent ui = bookingIntent(context, warm, openAt, useDate);
-        // Distinct action so PendingIntents for warm vs strike do not collapse incorrectly
+        Intent ui = bookingIntent(context, warm, openAt, useDate, isTest);
         ui.setAction(action);
         return PendingIntent.getActivity(
                 context,
@@ -188,8 +256,13 @@ public final class OpenAlarmScheduler {
         );
     }
 
-    /** Build BookingActivity intent for warm/strike (shared by receiver + catch-up). */
     public static Intent bookingIntent(Context context, boolean warm, long openAt, String useDate) {
+        return bookingIntent(context, warm, openAt, useDate, false);
+    }
+
+    /** Build BookingActivity intent for warm/strike (shared by receiver + catch-up). */
+    public static Intent bookingIntent(Context context, boolean warm, long openAt, String useDate,
+                                       boolean isTest) {
         SecureStore store = new SecureStore(context);
         Intent ui = new Intent(context, BookingActivity.class);
         ui.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -206,6 +279,7 @@ public final class OpenAlarmScheduler {
         ui.putExtra(BookingActivity.EXTRA_OPEN_MODE,
                 warm ? BookingActivity.MODE_WARM : BookingActivity.MODE_STRIKE);
         ui.putExtra(BookingActivity.EXTRA_FROM_ALARM, true);
+        ui.putExtra(BookingActivity.EXTRA_IS_TEST, isTest);
         return ui;
     }
 }

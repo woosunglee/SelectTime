@@ -7,8 +7,8 @@ import android.os.Build;
 import android.util.Log;
 
 /**
- * Backup path for open alarms. Primary warm/strike/prealert usually arrives via
- * AlarmClock → BookingActivity directly.
+ * Primary open-alarm path: AlarmClock fires this receiver, which starts
+ * BookingActivity + FGS + full-screen notification (OEM-safe).
  */
 public class OpenAlarmReceiver extends BroadcastReceiver {
     private static final String TAG = "OpenAlarmRx";
@@ -20,9 +20,15 @@ public class OpenAlarmReceiver extends BroadcastReceiver {
         }
         Context app = context.getApplicationContext();
         String action = intent.getAction();
+        boolean isTest = intent.getBooleanExtra(BookingActivity.EXTRA_IS_TEST, false);
 
         SecureStore store = new SecureStore(app);
-        if (!OpenScheduleHelper.isArmed(store)) {
+        if (isTest) {
+            if (!OpenScheduleHelper.isTestArmed(store)) {
+                Log.w(TAG, "test alarm while test disarmed — ignore " + action);
+                return;
+            }
+        } else if (!OpenScheduleHelper.isArmed(store)) {
             Log.w(TAG, "alarm while disarmed — ignore " + action);
             return;
         }
@@ -35,40 +41,60 @@ public class OpenAlarmReceiver extends BroadcastReceiver {
         }
 
         String useDate = intent.getStringExtra(BookingActivity.EXTRA_USE_DATE);
-        if (useDate == null || useDate.isEmpty()) {
-            useDate = OpenScheduleHelper.getNextUseDate(store);
+        long openAt = intent.getLongExtra(BookingActivity.EXTRA_OPEN_AT_MS, 0L);
+
+        if (isTest) {
+            useDate = OpenScheduleHelper.prepareTestOpenRun(app, useDate);
+            if (openAt <= 0) {
+                openAt = OpenScheduleHelper.getTestOpenAt(store);
+            }
+        } else {
+            if (useDate == null || useDate.isEmpty()) {
+                useDate = OpenScheduleHelper.getNextUseDate(store);
+            }
+            if (openAt <= 0) {
+                openAt = OpenScheduleHelper.getNextAt(store);
+            }
+            String prepared = OpenScheduleHelper.prepareOpenRun(app);
+            if (prepared != null && !prepared.isEmpty()) {
+                useDate = prepared;
+            }
         }
-        long openAt = intent.getLongExtra(BookingActivity.EXTRA_OPEN_AT_MS,
-                OpenScheduleHelper.getNextAt(store));
         if (openAt <= 0) {
             openAt = System.currentTimeMillis();
         }
 
-        String prepared = OpenScheduleHelper.prepareOpenRun(app);
-        if (prepared != null && !prepared.isEmpty()) {
-            useDate = prepared;
-        }
-
         Intent fg = new Intent(app, BookingForegroundService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            app.startForegroundService(fg);
+            try {
+                app.startForegroundService(fg);
+            } catch (Exception e) {
+                Log.e(TAG, "startForegroundService failed", e);
+            }
         } else {
             app.startService(fg);
         }
 
-        // PREALERT and WARM both open BookingActivity in warm mode so login starts.
         boolean warmMode = prealert || warm;
-        Intent ui = OpenAlarmScheduler.bookingIntent(app, warmMode, openAt, useDate);
+        Intent ui = OpenAlarmScheduler.bookingIntent(app, warmMode, openAt, useDate, isTest);
         ui.setAction(action);
+        ui.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
 
         if (prealert) {
             NotifyHelper.notifyPreOpenAlarm(app, useDate, openAt);
         }
         NotifyHelper.notifyOpenLaunch(app, ui, warmMode, useDate);
 
+        if (isTest && open) {
+            // One-shot: clear test state after strike fires (production schedule untouched).
+            OpenAlarmScheduler.cancelTest(app);
+        }
+
         try {
             app.startActivity(ui);
-            Log.i(TAG, action + " startActivity BookingActivity ok use=" + useDate);
+            Log.i(TAG, action + " startActivity BookingActivity ok use=" + useDate
+                    + " warm=" + warmMode + " test=" + isTest);
         } catch (Exception e) {
             Log.e(TAG, "startActivity failed — rely on full-screen notification", e);
         }

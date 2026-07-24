@@ -25,6 +25,11 @@ public final class OpenScheduleHelper {
     public static final String KEY_NEXT_AT = "schedule_next_at";
     public static final String KEY_NEXT_USE_DATE = "schedule_next_use_date";
 
+    /** Independent one-shot test open — never touches production schedule keys. */
+    public static final String KEY_TEST_ARMED = "schedule_test_armed";
+    public static final String KEY_TEST_OPEN_AT_MS = "schedule_test_open_at_ms";
+    public static final String KEY_TEST_USE_DATE = "schedule_test_use_date";
+
     public static final class NextRun {
         public final long openAtMillis;
         public final String useDate; // YYYY-MM-DD
@@ -76,6 +81,99 @@ public final class OpenScheduleHelper {
 
     public static String getNextUseDate(SecureStore store) {
         return store.get(KEY_NEXT_USE_DATE, "");
+    }
+
+    public static boolean isTestArmed(SecureStore store) {
+        return store.getBool(KEY_TEST_ARMED, false);
+    }
+
+    public static void saveTestNext(SecureStore store, NextRun next) {
+        store.putBool(KEY_TEST_ARMED, true);
+        store.put(KEY_TEST_USE_DATE, next.useDate);
+        store.put(KEY_TEST_OPEN_AT_MS, String.valueOf(next.openAtMillis));
+    }
+
+    public static void clearTest(SecureStore store) {
+        store.putBool(KEY_TEST_ARMED, false);
+        store.put(KEY_TEST_USE_DATE, "");
+        store.put(KEY_TEST_OPEN_AT_MS, "0");
+    }
+
+    public static long getTestOpenAt(SecureStore store) {
+        try {
+            return Long.parseLong(store.get(KEY_TEST_OPEN_AT_MS, "0"));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    public static String getTestUseDate(SecureStore store) {
+        return store.get(KEY_TEST_USE_DATE, "");
+    }
+
+    /**
+     * Build a one-shot open run at an arbitrary local open clock time (test / preview).
+     * Does not read or write production open-hour / weekday / next-schedule settings
+     * beyond using daysAhead only to derive a temporary use-date label.
+     */
+    public static NextRun buildCustomOpen(SecureStore store, long openAtMs) {
+        if (openAtMs <= System.currentTimeMillis()) {
+            return null;
+        }
+        int daysAhead = store.getInt(SecureStore.KEY_DAYS_AHEAD, 7);
+        if (daysAhead < 1) {
+            daysAhead = 7;
+        }
+        Calendar openDay = Calendar.getInstance();
+        openDay.setTimeInMillis(openAtMs);
+        openDay.set(Calendar.SECOND, 0);
+        openDay.set(Calendar.MILLISECOND, 0);
+
+        Calendar useDay = (Calendar) openDay.clone();
+        useDay.add(Calendar.DAY_OF_MONTH, daysAhead);
+
+        String useDate = String.format(Locale.US, "%04d-%02d-%02d",
+                useDay.get(Calendar.YEAR),
+                useDay.get(Calendar.MONTH) + 1,
+                useDay.get(Calendar.DAY_OF_MONTH));
+        int hour = openDay.get(Calendar.HOUR_OF_DAY);
+        int minute = openDay.get(Calendar.MINUTE);
+        String openLabel = String.format(Locale.KOREAN, "%04d-%02d-%02d (%s) %02d:%02d",
+                openDay.get(Calendar.YEAR),
+                openDay.get(Calendar.MONTH) + 1,
+                openDay.get(Calendar.DAY_OF_MONTH),
+                weekdayShort(openDay.get(Calendar.DAY_OF_WEEK)),
+                hour, minute);
+        return new NextRun(
+                openDay.getTimeInMillis(),
+                useDate,
+                openLabel,
+                weekdayShort(useDay.get(Calendar.DAY_OF_WEEK)),
+                weekdayShort(openDay.get(Calendar.DAY_OF_WEEK)),
+                "테스트"
+        );
+    }
+
+    /**
+     * Resolve use-date for a test open without writing production KEY_USE_DATE /
+     * schedule_next_* / open hour settings.
+     */
+    public static String prepareTestOpenRun(Context context, String useDateFromIntent) {
+        SecureStore store = new SecureStore(context);
+        String useDate = useDateFromIntent;
+        if (useDate == null || !useDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            useDate = getTestUseDate(store);
+        }
+        if (useDate == null || !useDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            int daysAhead = store.getInt(SecureStore.KEY_DAYS_AHEAD, 7);
+            Calendar use = Calendar.getInstance();
+            use.add(Calendar.DAY_OF_MONTH, Math.max(1, daysAhead));
+            useDate = String.format(Locale.US, "%04d-%02d-%02d",
+                    use.get(Calendar.YEAR),
+                    use.get(Calendar.MONTH) + 1,
+                    use.get(Calendar.DAY_OF_MONTH));
+        }
+        return useDate;
     }
 
     public static String preferredWeekdaysLabel(SecureStore store) {

@@ -2,6 +2,7 @@ package com.selecttime.hogye;
 
 import android.Manifest;
 import android.app.AlarmManager;
+import android.app.TimePickerDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -12,18 +13,25 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.DatePicker;
+import android.widget.FrameLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.view.ContextThemeWrapper;
 import androidx.core.content.ContextCompat;
 import androidx.webkit.WebViewCompat;
 
 import android.content.pm.PackageInfo;
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.Locale;
 
@@ -67,12 +75,14 @@ public class MainActivity extends AppCompatActivity {
         Button settings = findViewById(R.id.btnSettings);
         Button quickBook = findViewById(R.id.btnQuickBook);
         scheduleButton = findViewById(R.id.btnSchedule);
+        Button scheduleTest = findViewById(R.id.btnScheduleTest);
 
         settings.setOnClickListener(v ->
                 startActivity(new Intent(this, SettingsActivity.class)));
         quickBook.setOnClickListener(v ->
                 startActivity(new Intent(this, QuickBookActivity.class)));
         scheduleButton.setOnClickListener(v -> toggleSchedule());
+        scheduleTest.setOnClickListener(v -> startScheduleTestFlow());
 
         refreshStatus();
     }
@@ -252,6 +262,118 @@ public class MainActivity extends AppCompatActivity {
                 next.preferredLabel, warmHint);
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
         NotifyHelper.notify(this, NotifyHelper.NOTIF_STATUS, getString(R.string.app_name), msg);
+    }
+
+    /** Pick any open date+clock time (not court slot) and arm warm/prealert/strike. */
+    private void startScheduleTestFlow() {
+        String id = store.get(SecureStore.KEY_AUC_ID, "").trim();
+        String pw = store.get(SecureStore.KEY_AUC_PASSWORD, "");
+        if (id.isEmpty() || pw.isEmpty()) {
+            Toast.makeText(this, R.string.quick_book_need_login, Toast.LENGTH_LONG).show();
+            startActivity(new Intent(this, SettingsActivity.class));
+            return;
+        }
+        if (!OpenAlarmScheduler.canExact(this)) {
+            ensureExactAlarmPermission();
+            Toast.makeText(this, R.string.exact_alarm_required, Toast.LENGTH_LONG).show();
+            return;
+        }
+        ensureBatteryOptimization();
+
+        Calendar cal = Calendar.getInstance();
+        cal.add(Calendar.MINUTE, 5); // default: ~5 minutes from now
+        showTestOpenDatePicker(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH),
+                cal.get(Calendar.DAY_OF_MONTH),
+                cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE));
+    }
+
+    private void showTestOpenDatePicker(int year, int month, int day, int hour, int minute) {
+        ContextThemeWrapper themed = new ContextThemeWrapper(this, R.style.Theme_SelectTime_DatePicker);
+        DatePicker picker = new DatePicker(themed);
+        picker.init(year, month, day, null);
+
+        ScrollView scroll = new ScrollView(themed);
+        scroll.setFillViewport(true);
+        scroll.addView(picker, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.55f);
+        FrameLayout wrap = new FrameLayout(themed);
+        wrap.addView(scroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, maxH));
+
+        AlertDialog dlg = new AlertDialog.Builder(this, R.style.Theme_SelectTime_DatePicker)
+                .setTitle(R.string.schedule_test_pick_date)
+                .setView(wrap)
+                .setPositiveButton(R.string.save, (dialog, which) ->
+                        showTestOpenTimePicker(
+                                picker.getYear(), picker.getMonth(), picker.getDayOfMonth(),
+                                hour, minute))
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dlg.show();
+        tintDialogButtons(dlg);
+    }
+
+    private void showTestOpenTimePicker(int year, int month, int day, int hour, int minute) {
+        TimePickerDialog tpd = new TimePickerDialog(
+                this,
+                (view, h, m) -> confirmAndArmTestOpen(year, month, day, h, m),
+                hour,
+                minute,
+                true
+        );
+        tpd.setTitle(getString(R.string.schedule_test_pick_time));
+        tpd.show();
+    }
+
+    private void confirmAndArmTestOpen(int year, int month, int day, int hour, int minute) {
+        Calendar open = Calendar.getInstance();
+        open.set(Calendar.YEAR, year);
+        open.set(Calendar.MONTH, month);
+        open.set(Calendar.DAY_OF_MONTH, day);
+        open.set(Calendar.HOUR_OF_DAY, hour);
+        open.set(Calendar.MINUTE, minute);
+        open.set(Calendar.SECOND, 0);
+        open.set(Calendar.MILLISECOND, 0);
+
+        OpenScheduleHelper.NextRun next = OpenScheduleHelper.buildCustomOpen(store, open.getTimeInMillis());
+        if (next == null) {
+            Toast.makeText(this, R.string.schedule_test_past, Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        String body = getString(R.string.schedule_test_confirm_body,
+                next.openLabel, next.useDate, next.useWeekdayLabel);
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle(R.string.schedule_test_confirm_title)
+                .setMessage(body)
+                .setPositiveButton(R.string.schedule_test_open, (d, w) -> armTestOpen(next))
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+        dlg.show();
+        tintDialogButtons(dlg);
+    }
+
+    private void armTestOpen(OpenScheduleHelper.NextRun next) {
+        // Independent of production "오픈 예약" — separate keys + alarm request codes.
+        OpenAlarmScheduler.scheduleTest(this, next);
+        String msg = getString(R.string.schedule_test_armed_toast, next.openLabel, next.useDate);
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
+        NotifyHelper.notify(this, NotifyHelper.NOTIF_STATUS, getString(R.string.app_name), msg);
+        // Do not flip the production schedule status card to the test time.
+        refreshScheduleStatus();
+    }
+
+    private void tintDialogButtons(AlertDialog dlg) {
+        int accent = ContextCompat.getColor(this, R.color.accent);
+        Button pos = dlg.getButton(AlertDialog.BUTTON_POSITIVE);
+        Button neg = dlg.getButton(AlertDialog.BUTTON_NEGATIVE);
+        if (pos != null) {
+            pos.setTextColor(accent);
+        }
+        if (neg != null) {
+            neg.setTextColor(accent);
+        }
     }
 
     private void stopSchedule() {

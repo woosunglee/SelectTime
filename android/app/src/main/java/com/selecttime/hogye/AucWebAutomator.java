@@ -129,7 +129,33 @@ public class AucWebAutomator {
     private int targetWeekPrepareAttempts;
     private long targetWeekPreparingAtMs;
     private long openAtMillis;
+    private long strikeStartedAtMs;
     private final Runnable strikeRunnable = this::beginStrikeNow;
+    /** After open: keep probing until 「가」 appears; wait for late login/nav if needed. */
+    private final Runnable strikeBurstRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (bookingFlowDone || !strikeStarted || slotClicked || confirmAccepted) {
+                return;
+            }
+            long elapsed = System.currentTimeMillis() - strikeStartedAtMs;
+            // Login/prep may still be in flight after strike — do not expire early.
+            if (!loginSucceeded || !navigatedToReservation) {
+                if (elapsed > 90_000L) {
+                    return;
+                }
+                handler.postDelayed(this, 200);
+                return;
+            }
+            if (elapsed > 20_000L) {
+                return;
+            }
+            if (!slotSelectionStarted) {
+                trySelectDateAndSlot(webView);
+            }
+            handler.postDelayed(this, 100);
+        }
+    };
 
     public AucWebAutomator(Context context, WebView webView, Listener listener) {
         this.context = context.getApplicationContext();
@@ -335,12 +361,17 @@ public class AucWebAutomator {
 
     private int pollIntervalMs() {
         if (waitingForOpen) {
-            // Countdown UI needs ~1s ticks in the last 30s.
+            // Last 3s: 100ms for left<=0 strike backup. Last 30s: 0.5s UI. Earlier: 1s.
             long left = openAtMillis - System.currentTimeMillis();
+            if (left <= 3_000L) {
+                return 100;
+            }
             return left <= 30_000L ? 500 : 1000;
         }
+        if (strikeStarted && !slotClicked) {
+            return 200;
+        }
         if (!loginSucceeded && !loginFailed) {
-            // Active login loop: do not wait for pageFinished callbacks.
             return 700;
         }
         return fastOpenPath ? 1200 : 2000;
@@ -371,9 +402,23 @@ public class AucWebAutomator {
      * so an in-progress login/calendar wait is not wiped.
      */
     public void ensureWarm(long openAtMs) {
-        if (warmMode && !strikeStarted && !bookingFlowDone) {
+        // Preserve in-flight warm OR post-strike login/nav (do not wipe WebView).
+        if (!bookingFlowDone && (warmMode || waitingForOpen || strikeStarted
+                || loginSucceeded || loginAttempted || pollCount > 0)) {
             if (openAtMs > 0) {
                 openAtMillis = openAtMs;
+            }
+            if (strikeStarted) {
+                // Open already fired — keep driving login/prep, do not re-arm wait.
+                if (!loginSucceeded) {
+                    status("오픈 후 로그인 계속…");
+                    kickLoginIfNeeded();
+                } else if (!navigatedToReservation) {
+                    goReservation();
+                } else if (!slotClicked) {
+                    prepareTargetWeek(webView);
+                }
+                return;
             }
             if (waitingForOpen) {
                 armOpenWait();
@@ -389,26 +434,47 @@ public class AucWebAutomator {
     }
 
     /**
-     * Open-time strike: if warm already waiting, release slot click;
-     * otherwise cold-start with fast delays.
+     * Open-time strike: if any warm/login session is alive (even mid-login), hand off
+     * to beginStrikeNow without wiping WebView. Cold-start only when nothing is running.
      */
     public void startStrike(long openAtMs) {
-        if (waitingForOpen || (warmMode && loginSucceeded && navigatedToReservation && !strikeStarted)) {
-            openAtMillis = openAtMs > 0 ? openAtMs : openAtMillis;
+        if (openAtMs > 0) {
+            openAtMillis = openAtMs;
+        }
+        if (hasActiveSessionForHandoff()) {
             beginStrikeNow();
             return;
         }
+        // Cold start: no prior warm/login session on this WebView.
         warmMode = false;
         fastOpenPath = true;
-        openAtMillis = openAtMs;
         strikeStarted = true;
         waitingForOpen = false;
         startInternal();
     }
 
+    /**
+     * True when wiping via startInternal would destroy in-flight login / calendar prep.
+     * Covers mid-login after beginStrike clears warmMode.
+     */
+    private boolean hasActiveSessionForHandoff() {
+        if (bookingFlowDone) {
+            return false;
+        }
+        if (warmMode || waitingForOpen || strikeStarted) {
+            return true;
+        }
+        if (loginSucceeded || loginAttempted || navigatedToReservation) {
+            return true;
+        }
+        // Poll already driving a session (prealert/warm) even before first login flag.
+        return pollCount > 0;
+    }
+
     /** Called at open instant (warm wait end or OPEN alarm). */
     public void beginStrikeNow() {
         handler.removeCallbacks(strikeRunnable);
+        handler.removeCallbacks(strikeBurstRunnable);
         if (bookingFlowDone) {
             return;
         }
@@ -418,24 +484,32 @@ public class AucWebAutomator {
         strikeStarted = true;
         waitingForOpen = false;
         fastOpenPath = true;
+        // Keep prep drivers alive: warmMode=false must NOT stop login/nav kicks.
         warmMode = false;
         slotClicked = false;
         slotSelectionStarted = false;
         slotSelectAttempts = 0;
         confirmPollTries = 0;
         confirmAccepted = false;
-        status(TONE_STRIKE, "오픈! 「가」 슬롯 클릭 시작");
+        strikeStartedAtMs = System.currentTimeMillis();
         NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
                 context.getString(R.string.app_name), "오픈 — 슬롯 선점 시도");
         if (!loginSucceeded || !navigatedToReservation) {
-            // Cold path still logging in — mark fast and continue; slot when calendar ready.
+            status(TONE_WARN, !loginSucceeded
+                    ? "오픈 — 로그인 완료 후 즉시 「가」 타겟"
+                    : "오픈 — 달력 이동 후 즉시 「가」 타겟");
+            // Burst waits until login+nav; kicks keep driving prep.
+            handler.postDelayed(strikeBurstRunnable, 100);
             return;
         }
+        status(TONE_STRIKE, "오픈! 「가」 슬롯 즉시 타겟팅");
         trySelectDateAndSlot(webView);
+        handler.postDelayed(strikeBurstRunnable, 100);
     }
 
     private void startInternal() {
         handler.removeCallbacks(strikeRunnable);
+        handler.removeCallbacks(strikeBurstRunnable);
         loginAttempted = false;
         loginSucceeded = false;
         loginFailed = false;
@@ -476,6 +550,7 @@ public class AucWebAutomator {
         targetWeekPreparing = false;
         targetWeekPrepareAttempts = 0;
         targetWeekPreparingAtMs = 0;
+        strikeStartedAtMs = 0;
 
         String net = networkLabel();
         if (warmMode) {
@@ -500,24 +575,42 @@ public class AucWebAutomator {
             finish(false, "시간 초과");
             return;
         }
-        // Warm wait: keep session alive and strike exactly at open.
+        // Warm wait: calendar only — never click slots before open.
         if (waitingForOpen && !strikeStarted && !bookingFlowDone) {
             long left = openAtMillis - System.currentTimeMillis();
             if (left <= 0) {
                 beginStrikeNow();
             } else if (left <= 30_000L) {
+                // Last 3s polls at 100ms (left<=0 backup); rest of 30s at 0.5s.
                 int sec = Math.max(1, (int) ((left + 999) / 1000));
-                status(TONE_WAIT, String.format(Locale.KOREAN, "예약 대기 중… %d초", sec));
+                if (left <= 3_000L) {
+                    status(TONE_WAIT, String.format(Locale.KOREAN,
+                            "예약 대기 중… %d초 (정각 슬롯 타겟 준비)", sec));
+                } else {
+                    status(TONE_WAIT, String.format(Locale.KOREAN, "예약 대기 중… %d초", sec));
+                }
             } else if (pollCount % 5 == 0) {
                 status(TONE_NORMAL, String.format(Locale.KOREAN,
-                        "오픈 대기 중… %d초 (달력 준비됨)", Math.max(0, (left + 999) / 1000)));
+                        "오픈 대기 중… %d초 (달력 준비됨 · 슬롯 미클릭)", Math.max(0, (left + 999) / 1000)));
             }
         } else if (warmMode && !strikeStarted && !loginFailed && openAtMillis > 0) {
-            // Still logging in near open — show urgency, keep active login kicks.
             long left = openAtMillis - System.currentTimeMillis();
             if (left > 0 && left <= 30_000L && !loginSucceeded) {
                 status(TONE_WARN, String.format(Locale.KOREAN,
                         "오픈 %d초 — 로그인 진행 중…", Math.max(1, (left + 999) / 1000)));
+            }
+        } else if (strikeStarted && !slotClicked && !bookingFlowDone) {
+            // Keep strike burst alive even if a callback was dropped.
+            long elapsed = System.currentTimeMillis() - strikeStartedAtMs;
+            if (!loginSucceeded) {
+                if (elapsed < 90_000L && pollCount % 3 == 0) {
+                    status(TONE_WARN, String.format(Locale.KOREAN,
+                            "오픈 후 로그인 진행 중… (%s)", networkLabel()));
+                }
+            } else if (!navigatedToReservation) {
+                goReservation();
+            } else if (elapsed < 20_000L && !slotSelectionStarted) {
+                trySelectDateAndSlot(webView);
             }
         }
         // Core principle: act on a timer — never depend only on pageFinished/JS callbacks.
@@ -530,9 +623,10 @@ public class AucWebAutomator {
     /**
      * Active login driver: probe/click/fill on a timer even if onPageFinished or
      * evaluateJavascript callbacks are late or missing (slow Wi‑Fi/LTE).
+     * Continues after strike — open must not create a "login hole".
      */
     private void kickLoginIfNeeded() {
-        if (bookingFlowDone || loginSucceeded || loginFailed || waitingForOpen || strikeStarted) {
+        if (bookingFlowDone || loginSucceeded || loginFailed || waitingForOpen) {
             return;
         }
         long now = System.currentTimeMillis();
@@ -546,23 +640,41 @@ public class AucWebAutomator {
             lastLoginKickMs = now;
             advanceLogin(webView);
         }
-        long elapsed = now - loginPhaseStartedMs;
-        // Stuck >35s without login: reload login URL (common after Wi‑Fi blip).
-        if (elapsed > 35_000L && loginStuckReloads < 4
-                && now - lastNetworkReloadMs > 12_000L) {
+        // Exhausted submit tries: reload and keep going (never stall on open path).
+        if (loginTries >= 5 && now - lastNetworkReloadMs > 5000L) {
+            if (loginStuckReloads >= 4) {
+                loginStuckReloads = 0;
+                Log.w(TAG, "loginStuckReloads rolled over — keep trying net=" + networkLabel());
+            }
             loginStuckReloads++;
             status(TONE_WARN, String.format(Locale.KOREAN,
-                    "로그인 지연 — 재로드 %d/4 (%s)", loginStuckReloads, networkLabel()));
+                    "로그인 재시도 한도 — 재로드 %d (한도 리셋·계속) · %s",
+                    loginStuckReloads, networkLabel()));
+            reloadLoginPage("tries-exhausted");
+            return;
+        }
+        long elapsed = now - loginPhaseStartedMs;
+        // Stuck >35s without login: reload login URL (common after Wi‑Fi blip).
+        if (elapsed > 35_000L && now - lastNetworkReloadMs > 12_000L) {
+            if (loginStuckReloads >= 4) {
+                loginStuckReloads = 0;
+                Log.w(TAG, "loginStuckReloads rolled over (stuck) — keep trying net="
+                        + networkLabel());
+            }
+            loginStuckReloads++;
+            status(TONE_WARN, String.format(Locale.KOREAN,
+                    "로그인 지연 — 재로드 %d (계속) · %s",
+                    loginStuckReloads, networkLabel()));
             reloadLoginPage("stuck");
         }
     }
 
     /**
-     * After login: keep driving reservation navigation + calendar prep on a timer
-     * so warm wait ("예약 대기") is reached even if onPageFinished is late.
+     * After login: drive reservation navigation + calendar prep on a timer.
+     * Runs until slot click even after strike (warmMode may already be false).
      */
     private void kickWarmPrepIfNeeded() {
-        if (bookingFlowDone || strikeStarted || waitingForOpen || !warmMode || loginFailed) {
+        if (bookingFlowDone || waitingForOpen || loginFailed || slotClicked) {
             return;
         }
         if (!loginSucceeded) {
@@ -621,13 +733,28 @@ public class AucWebAutomator {
         loginAttemptedAtMs = 0;
         integratedLoginClicked = false;
         lastShortcutClickMs = 0;
-        // Network blips often burn submit tries before the form is ready.
-        if ("stuck".equals(reason) || reason.startsWith("http") || reason.startsWith("main")
+        String net = networkLabel();
+        // Network / stuck / try-cap: give SSO another full attempt window.
+        if ("stuck".equals(reason) || "tries-exhausted".equals(reason)
+                || reason.startsWith("http") || reason.startsWith("main")
                 || "ssl".equals(reason)) {
-            loginTries = Math.max(0, loginTries - 1);
+            loginTries = 0;
+            loginPhaseStartedMs = System.currentTimeMillis();
+            // Cap rollover: never leave loginAttempts permanently blocked.
+            if ("tries-exhausted".equals(reason) || "stuck".equals(reason)) {
+                loginFailed = false;
+            }
         }
         lastNetworkReloadMs = System.currentTimeMillis();
-        Log.w(TAG, "reloadLoginPage reason=" + reason + " net=" + networkLabel());
+        Log.w(TAG, "reloadLoginPage reason=" + reason
+                + " net=" + net
+                + " strike=" + strikeStarted
+                + " warm=" + warmMode
+                + " stuckReloads=" + loginStuckReloads
+                + " openIn=" + (openAtMillis > 0
+                ? (openAtMillis - System.currentTimeMillis()) : -1));
+        status(TONE_WARN, String.format(Locale.KOREAN,
+                "로그인 페이지 재로드 (%s · %s)", reason, net));
         webView.stopLoading();
         webView.loadUrl(SecureStore.LOGIN_URL);
     }
@@ -790,6 +917,20 @@ public class AucWebAutomator {
                         + " for(var p=0;p<pick.length;p++){try{pick[p].click();return true;}catch(e){}}"
                         + " return false;"
                         + "}"
+                        + "function clickWeekNav(dir){"
+                        + " var nodes=document.querySelectorAll('a,button,span,i,em,div,img');"
+                        + " var exact=[], soft=[];"
+                        + " for(var n=0;n<nodes.length;n++){if(!vis(nodes[n]))continue;var tx=txt(nodes[n]);"
+                        + "  var cl=String(nodes[n].className||'').toLowerCase();"
+                        + "  var ar=(nodes[n].getAttribute&&nodes[n].getAttribute('aria-label'))||'';"
+                        + "  var next=tx.indexOf('다음주')>=0||tx.indexOf('다음 주')>=0||cl.indexOf('next')>=0||ar.indexOf('다음주')>=0;"
+                        + "  var prev=tx.indexOf('이전주')>=0||tx.indexOf('이전 주')>=0||cl.indexOf('prev')>=0||ar.indexOf('이전주')>=0;"
+                        + "  if(dir==='next'){if(next)soft.push(nodes[n]);}"
+                        + "  else{if(prev)soft.push(nodes[n]);}"
+                        + " }"
+                        + " for(var p=0;p<soft.length;p++){try{soft[p].click();return true;}catch(e){}}"
+                        + " return false;"
+                        + "}"
                         + "var shown=shownMonth();"
                         + "if(!shown){if(clickMonthNav('next'))return 'month-nav:next-unknown';return 'unresolved:no-month';}"
                         + "if(year>shown.y||(year===shown.y&&month>shown.m)){"
@@ -804,6 +945,7 @@ public class AucWebAutomator {
                         + " if(t.length<4||t.length>420||!(/\\d{1,2}:\\d{2}/.test(t)))continue;"
                         + " var h=el.children&&el.children.length?txt(el.children[0]):'';"
                         + " if(h===d||h.indexOf(d+'(')===0||t===d||t.indexOf(d+' ')===0||t.indexOf(d+'(')===0)return 'ready';}"
+                        + "if(clickWeekNav('next')) return 'week-nav:next';"
                         + "return 'unresolved:no-day';})(%d, %d, %d);", year, month, day);
         view.evaluateJavascript(js, value -> {
             targetWeekPreparing = false;
@@ -813,8 +955,11 @@ public class AucWebAutomator {
                 targetWeekPrepared = true;
                 status("목표 이용 달력 준비 완료 — 오픈 대기");
                 armOpenWait();
-            } else if (result.contains("month-nav") && shouldHoldForOpen()) {
-                status("이용일이 다른 달 — 「>」로 달력 이동 중…");
+            } else if ((result.contains("month-nav") || result.contains("week-nav"))
+                    && shouldHoldForOpen()) {
+                status(result.contains("week-nav")
+                        ? "이용일이 다른 주 — 「다음주」 이동 중…"
+                        : "이용일이 다른 달 — 「>」로 달력 이동 중…");
                 handler.postDelayed(() -> prepareTargetWeek(webView), 450);
             } else {
                 // Do not delay the strike if this calendar layout cannot be recognized.
@@ -825,6 +970,10 @@ public class AucWebAutomator {
 
     private void armOpenWait() {
         if (waitingForOpen) {
+            // Refresh exact strike schedule if openAt was updated.
+            handler.removeCallbacks(strikeRunnable);
+            long waitRefresh = Math.max(0L, openAtMillis - System.currentTimeMillis());
+            handler.postDelayed(strikeRunnable, waitRefresh);
             return;
         }
         waitingForOpen = true;
@@ -834,7 +983,7 @@ public class AucWebAutomator {
                     "예약 대기 중… %d초", Math.max(1, (wait + 999) / 1000)));
         } else {
             status(TONE_NORMAL, String.format(Locale.KOREAN,
-                    "사전준비 완료 — 오픈까지 %d초 대기", (wait + 999) / 1000));
+                    "사전준비 완료 — 오픈까지 %d초 대기 (달력만·슬롯 미클릭)", (wait + 999) / 1000));
         }
         NotifyHelper.notify(context, NotifyHelper.NOTIF_STATUS,
                 context.getString(R.string.app_name),
@@ -1085,7 +1234,8 @@ public class AucWebAutomator {
             return;
         }
         if (loginTries >= 5) {
-            status("로그인 재시도 한도 초과 — 아이디/비밀번호·네트워크(" + networkLabel() + ") 확인");
+            // kickLoginIfNeeded will reload + reset tries; avoid hard stall here.
+            status(TONE_WARN, "로그인 재시도 한도 — 재로드 대기 (" + networkLabel() + ")");
             return;
         }
         loginAttempted = true;
@@ -1252,13 +1402,14 @@ public class AucWebAutomator {
         if (slotSelectionStarted) {
             return;
         }
-        if (slotSelectAttempts >= 8) {
+        int maxAttempts = (fastOpenPath || strikeStartedAtMs > 0) ? 40 : 8;
+        if (slotSelectAttempts >= maxAttempts) {
             status("날짜·시간 슬롯을 클릭하지 못했습니다 — 화면에서 직접 「가」 시간을 눌러 주세요");
             return;
         }
         slotSelectionStarted = true;
         slotSelectAttempts++;
-        status("날짜·시간 그리드에서 「가」 슬롯 클릭… (" + slotSelectAttempts + ")");
+        status("날짜·시간 그리드에서 「가」 슬롯 클릭… (" + slotSelectAttempts + "/" + maxAttempts + ")");
 
         int[] ymd = resolveUseYearMonthDay();
         int year = ymd[0];
@@ -1282,17 +1433,17 @@ public class AucWebAutomator {
                 timeArray.append(',');
             }
             timeArray.append(JSONObject.quote(p));
-            // Also match start HH:MM if a range was given
             if (p.matches("\\d{1,2}:\\d{2}~\\d{1,2}:\\d{2}")) {
                 timeArray.append(',').append(JSONObject.quote(p.substring(0, p.indexOf('~'))));
             }
         }
         timeArray.append(']');
         String courtsJson = JSONObject.quote(courts);
+        // At open, 「가」 may appear a beat late — still click preferred time if not 불가.
+        boolean forcePreferred = fastOpenPath || strikeStartedAtMs > 0;
 
-        // Monthly/weekly grid: match year-month first, then day column, then 「가」 slot.
         String js = String.format(Locale.US, ""
-                        + "(function(year, month, day, times, courtsCsv, autoAny){"
+                        + "(function(year, month, day, times, courtsCsv, autoAny, forcePref){"
                         + "function visible(el){ if(!el) return false; var r=el.getBoundingClientRect(); return r.width>0&&r.height>0; }"
                         + "function txt(el){ return ((el&&(el.innerText||el.textContent))||'').replace(/\\s+/g,' ').trim(); }"
                         + "function clickEl(el){"
@@ -1343,6 +1494,22 @@ public class AucWebAutomator {
                         + " for(var p=0;p<pick.length;p++){if(clickEl(pick[p])) return true;}"
                         + " return false;"
                         + "}"
+                        + "function clickWeekNav(dir){"
+                        + " var nodes=document.querySelectorAll('a,button,span,i,em,div,img');"
+                        + " var soft=[];"
+                        + " for(var i=0;i<nodes.length;i++){"
+                        + "  if(!visible(nodes[i])) continue;"
+                        + "  var t=txt(nodes[i]);"
+                        + "  var cls=((nodes[i].className||'')+'').toLowerCase();"
+                        + "  var aria=(nodes[i].getAttribute&& (nodes[i].getAttribute('aria-label')||''))||'';"
+                        + "  var next=t.indexOf('다음주')>=0||t.indexOf('다음 주')>=0||aria.indexOf('다음주')>=0;"
+                        + "  var prev=t.indexOf('이전주')>=0||t.indexOf('이전 주')>=0||aria.indexOf('이전주')>=0;"
+                        + "  if(dir==='next'&&next) soft.push(nodes[i]);"
+                        + "  if(dir==='prev'&&prev) soft.push(nodes[i]);"
+                        + " }"
+                        + " for(var p=0;p<soft.length;p++){if(clickEl(soft[p])) return true;}"
+                        + " return false;"
+                        + "}"
                         + "var shown=shownMonth();"
                         + "if(!shown){"
                         + " if(clickMonthNav('next')) return 'month-nav:next-unknown';"
@@ -1386,18 +1553,20 @@ public class AucWebAutomator {
                         + " }"
                         + " roots.sort(function(a,b){ return txt(a).length-txt(b).length; });"
                         + "}"
-                        // Month already matches. Missing day means wait/retry — do not flip months.
                         + "if(!roots.length){"
+                        + " if(clickWeekNav('next')) return 'week-nav:next';"
                         + " SelectTimeBridge.onSlotClicked('none');"
                         + " return 'none;no-day-col';"
                         + "}"
                         + "var scopes=[roots[0]];"
+                        + "if(roots.length>1) scopes.push(roots[1]);"
                         + "var best=null, bestScore=-1, bestWant='';"
                         + "for(var si=0;si<scopes.length;si++){"
-                        + " var nodes=scopes[si].querySelectorAll('a,button,li,td,span,div,label,p');"
+                        + " var scope=scopes[si];"
+                        + " var nodes=scope.querySelectorAll('a,button,li,td,span,div,label,p,strong,em');"
                         + " for(var j=0;j<nodes.length;j++){"
                         + "  var el=nodes[j]; if(!visible(el)) continue;"
-                        + "  var tx=txt(el); if(!tx || tx.length>56) continue;"
+                        + "  var tx=txt(el); if(!tx || tx.length>80) continue;"
                         + "  var cls=((el.className||'')+' '+((el.parentElement&&el.parentElement.className)||'')).toString();"
                         + "  var busy=(tx.indexOf('불')>=0 && tx.indexOf('가')<0) || /unable|disable|full|close|ico_?bul|state_?n/i.test(cls);"
                         + "  var avail=tx.indexOf('가')>=0 || /able|avail|possible|open|ico_?ga|state_?y/i.test(cls);"
@@ -1407,13 +1576,22 @@ public class AucWebAutomator {
                         + "  for(var ti=0;ti<times.length;ti++){"
                         + "   if(times[ti] && tx.indexOf(times[ti])>=0){ wantHit=times[ti]; break; }"
                         + "  }"
-                        + "  var timeLike=/\\d{1,2}:\\d{2}/.test(tx);"
+                        // 「가」 alone near a preferred time in the same row/parent
+                        + "  if(!wantHit && (tx==='가' || tx.indexOf('가')===0)){"
+                        + "   var around=txt(el.parentElement||el);"
+                        + "   for(var ti2=0;ti2<times.length;ti2++){"
+                        + "    if(times[ti2] && around.indexOf(times[ti2])>=0){ wantHit=times[ti2]; avail=true; break; }"
+                        + "   }"
+                        + "  }"
+                        + "  var timeLike=/\\d{1,2}:\\d{2}/.test(tx) || !!wantHit;"
+                        + "  if(forcePref && wantHit && !busy) avail=true;"
                         + "  if(!wantHit && !(autoAny && timeLike && avail)) continue;"
-                        + "  if(!timeLike) continue;"
+                        + "  if(!timeLike && tx!=='가' && tx.indexOf('가')!==0) continue;"
                         + "  if(!avail && wantHit) continue;"
                         + "  var score=0;"
                         + "  if(wantHit) score+=30;"
                         + "  if(avail) score+=20;"
+                        + "  if(forcePref && wantHit) score+=10;"
                         + "  if(el.tagName==='A'||el.tagName==='BUTTON') score+=4;"
                         + "  if(tx.length<=24) score+=3;"
                         + "  if(score>bestScore){ bestScore=score; best=el; bestWant=wantHit||tx; }"
@@ -1426,10 +1604,20 @@ public class AucWebAutomator {
                         + "}"
                         + "SelectTimeBridge.onSlotClicked('none');"
                         + "return 'none;roots='+roots.length;"
-                        + "})(%d, %d, %d, %s, %s, %s);",
-                year, month, day, timeArray, courtsJson, autoCourt ? "true" : "false");
+                        + "})(%d, %d, %d, %s, %s, %s, %s);",
+                year, month, day, timeArray, courtsJson,
+                autoCourt ? "true" : "false",
+                forcePreferred ? "true" : "false");
 
-        // Delay so the calendar DOM is fully painted.
+        long paintDelay;
+        if (strikeStartedAtMs > 0 && System.currentTimeMillis() - strikeStartedAtMs < 5_000L) {
+            // Open window: no artificial wait — click as soon as DOM has 「가」.
+            paintDelay = 0;
+        } else {
+            paintDelay = slotSelectAttempts == 1
+                    ? (fastOpenPath ? 80 : 1000)
+                    : (fastOpenPath ? 60 : 700);
+        }
         handler.postDelayed(() -> {
             if (bookingFlowDone || slotClicked) {
                 slotSelectionStarted = false;
@@ -1439,9 +1627,10 @@ public class AucWebAutomator {
                 Log.d(TAG, "slot=" + v);
                 String raw = v == null ? "" : v;
                 if (raw.contains("month-nav") || raw.contains("week-nav")) {
-                    status("이용일이 다른 달/주 — 달력 이동 후 재시도");
+                    status(raw.contains("week-nav")
+                            ? "이용일이 다른 주 — 주 이동 후 재시도"
+                            : "이용일이 다른 달/주 — 달력 이동 후 재시도");
                     slotSelectionStarted = false;
-                    // Don't burn attempt count for calendar navigation.
                     if (slotSelectAttempts > 0) {
                         slotSelectAttempts--;
                     }
@@ -1449,12 +1638,10 @@ public class AucWebAutomator {
                         if (!bookingFlowDone && !slotClicked) {
                             trySelectDateAndSlot(webView);
                         }
-                    }, fastOpenPath ? 700 : 1400);
+                    }, fastOpenPath ? 250 : 1400);
                 }
             });
-        }, slotSelectAttempts == 1
-                ? (fastOpenPath ? 250 : 1000)
-                : (fastOpenPath ? 120 : 700));
+        }, paintDelay);
     }
 
     /** Resolve configured use-date into year/month/day (1-based month). */
@@ -2549,16 +2736,28 @@ public class AucWebAutomator {
                 if ("none".equals(time)) {
                     slotClicked = false;
                     slotSelectionStarted = false;
-                    status("선호 「가」 슬롯을 찾지 못함 — 재시도");
-                    handler.postDelayed(() -> trySelectDateAndSlot(webView),
-                            fastOpenPath ? 400 : 900);
+                    long now = System.currentTimeMillis();
+                    // Right after open, 「가」 often appears a few hundred ms late — soft-retry.
+                    boolean openWindow = strikeStartedAtMs > 0
+                            && now - strikeStartedAtMs < 20_000L;
+                    if (openWindow && slotSelectAttempts > 0) {
+                        slotSelectAttempts--;
+                        status("오픈 직후 슬롯 대기… 재시도");
+                        long retry = now - strikeStartedAtMs < 3_000L ? 50L : 120L;
+                        handler.postDelayed(() -> trySelectDateAndSlot(webView), retry);
+                    } else {
+                        status("선호 「가」 슬롯을 찾지 못함 — 재시도");
+                        handler.postDelayed(() -> trySelectDateAndSlot(webView),
+                                fastOpenPath ? 280 : 900);
+                    }
                     return;
                 }
                 // Tentative only — real success = 등록확인 팝업 출현.
                 slotSelectionStarted = false;
+                handler.removeCallbacks(strikeBurstRunnable);
                 status("슬롯 클릭 시도: " + time + " — 확인 팝업 검증");
                 handler.postDelayed(() -> verifySlotConfirmDialog(time),
-                        fastOpenPath ? 350 : 600);
+                        fastOpenPath ? 200 : 600);
             });
         }
 
